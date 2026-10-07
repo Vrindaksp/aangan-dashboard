@@ -15,6 +15,8 @@ export interface ProviderCall {
   durationSec: number | null;
   /** Provider-side outcome. 'failed' = the call broke mid-way and the caller was not served. */
   outcome: 'completed' | 'missed' | 'failed';
+  /** False while the provider is still post-processing (the transcript may not exist yet) — try again on the next run. */
+  ready: boolean;
   /** Transcript with "Front Desk:" / "Caller:" labels, when the provider supplies one. */
   transcript: string | null;
   /** Recording to transcribe with Gemini when no transcript is supplied. */
@@ -27,8 +29,10 @@ export interface ProviderCall {
 export interface VoiceProvider {
   readonly name: string;
   isConfigured(): boolean;
-  /** Completed (or failed / missed) calls that ended after `since`. */
+  /** Calls that started at or after `since` (cheap: no transcripts yet). */
   listCalls(since: Date): Promise<ProviderCall[]>;
+  /** Fetch the transcript for ONE call — called only for calls we haven't ingested yet, so repeat runs stay cheap. */
+  loadTranscript?(call: ProviderCall): Promise<string | null>;
 }
 
 const AGENT_ROLES = /^(assistant|agent|bot|ai|system)$/i;

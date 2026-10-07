@@ -1,3 +1,4 @@
+import { after } from 'next/server';
 import { Shell, allowedViews } from '@/components/Shell';
 import type { View, ViewCtx } from '@/components/types';
 import { Calendar } from '@/components/views/Calendar';
@@ -9,6 +10,7 @@ import { getRole, isReadOnlyViewer } from '@/lib/auth';
 import { availableMonths, computeMetrics, monthKey } from '@/lib/metrics';
 import { getStore } from '@/lib/store';
 import { href, type SP } from '@/lib/url';
+import { backgroundSync, shouldRunOnLoad } from '@/lib/voice/sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +19,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
   const sp: SP = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v]));
 
   const role = await getRole();
+  // Vaani calls are pulled by the scheduled job; this also pulls a few new ones (at most every 2 min per instance) while a
+  // designer has the dashboard open, so calls show up within about a minute. De-duplicated, so it can never double-ingest.
+  if (role === 'designer' && shouldRunOnLoad()) after(backgroundSync);
   const ds = await getStore().load(role); // founder dataset is already stripped of personal data in the store layer
   const now = new Date();
   const months = availableMonths(ds);

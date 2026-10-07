@@ -18,7 +18,8 @@
     "designers:mock": "tsx scripts/designers-mock.ts",
     "hubspot:check": "tsx scripts/hubspot-check.ts",
     "hubspot:backfill": "tsx scripts/hubspot-backfill.ts",
-    "calendar:check": "tsx scripts/google-calendar-check.ts"
+    "calendar:check": "tsx scripts/google-calendar-check.ts",
+    "voice:check": "tsx scripts/voice-check.ts"
   },
   "dependencies": {
     "@google/genai": "^2.27.0",

@@ -426,4 +426,177 @@ test('PUBLIC_VIEW=true lets anyone READ the designer screens but never change an
   }
 });
 
+test('PUBLIC_EDIT=true removes the login from the dashboard (buttons work) but nothing else; machine endpoints stay bearer-protected', async () => {
+  const { NextRequest } = await import('next/server');
+  const { proxy } = await import('../proxy');
+  const keep = { DESIGNER_PASSWORD: process.env.DESIGNER_PASSWORD, FOUNDER_PASSWORD: process.env.FOUNDER_PASSWORD, PUBLIC_EDIT: process.env.PUBLIC_EDIT, PUBLIC_VIEW: process.env.PUBLIC_VIEW };
+  Object.assign(process.env, { DESIGNER_PASSWORD: 'dpw', FOUNDER_PASSWORD: 'fpw', PUBLIC_EDIT: 'true' });
+  delete process.env.PUBLIC_VIEW;
+  const run = (path: string, init: { method?: string; headers?: Record<string, string> } = {}) => proxy(new NextRequest(`https://x.test${path}`, init));
+  const hdr = (r: Response, n: string) => r.headers.get(`x-middleware-request-${n}`);
+  try {
+    assert.equal(hdr(run('/'), 'x-aangan-role'), 'designer', 'no login → the full designer tool');
+    assert.equal(run('/', { method: 'POST' }).status, 200, 'buttons (server actions) work with no login');
+    assert.equal(hdr(run('/', { method: 'POST' }), 'x-aangan-user'), 'open access', 'and are NOT treated as the read-only viewer');
+    assert.equal(hdr(run('/?as=founder'), 'x-aangan-role'), 'founder', 'results-only view stays one click away');
+    assert.equal(run('/other').status, 401, 'other paths still need credentials');
+    assert.equal(run('/other', { method: 'POST' }).status, 401);
+    assert.equal(hdr(run('/api/ingest/call', { method: 'POST' }), 'x-aangan-role'), null, 'machine endpoints get no role — they check their own bearer key');
+    assert.equal(hdr(run('/', { headers: { 'x-aangan-role': 'founder', 'x-aangan-user': 'viewer' } }), 'x-aangan-role'), 'designer', 'spoofed headers are ignored');
+    process.env.PUBLIC_EDIT = 'false';
+    assert.equal(run('/', { method: 'POST' }).status, 401, 'switch off → buttons locked again');
+  } finally {
+    for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
 
+// ---------------------------------------------------------------------------------------------
+console.log('\nVaani voice integration (simulated API, shaped like the documented responses)');
+const vcall = (id: string, over: Record<string, unknown> = {}) => ({
+  call_id: id, call_type: 'Inbound', direction: 'Inbound', call_status: 'User disconnected', agent_name: 'studio-agent', from_number: '+919800000001', to_number: '+912000000000',
+  Start_time: '2026-10-07T04:00:00.000000', End_time: '2026-10-07T04:03:10.000000', duration_ms: 742.269, post_processing_status: 'completed',
+  recording_api: `https://api.vaanivoice.ai/api/stream/${id}`, call_transcription: `https://api.vaanivoice.ai/api/transcript/${id}`, ...over,
+});
+const jsonRes = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+const page = (data: unknown[], p: number, total: number) => ({ data, pagination: { page: p, page_size: 200, total_count: data.length, total_pages: total, has_next: p < total, has_previous: p > 1 } });
+
+test('Vaani: auth header, inbound-only filter, UTC timestamps, computed duration, outcome + readiness mapping', async () => {
+  const { createVaaniProvider } = await import('../lib/voice/vaani');
+  const seen: { url: string; key: string | null }[] = [];
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    seen.push({ url: String(url), key: new Headers(init?.headers).get('x-api-key') });
+    return jsonRes(page([
+      vcall('in-1'),
+      vcall('out-1', { direction: 'Outbound', call_type: 'Outbound' }),
+      vcall('in-noans', { call_status: 'No answer' }),
+      vcall('in-blip', { End_time: '2026-10-07T04:00:02.000000' }),
+      vcall('in-pending', { post_processing_status: 'in_progress' }),
+      vcall('in-old', { Start_time: '2026-09-01T04:00:00.000000', End_time: '2026-09-01T04:05:00.000000' }),
+    ], 1, 1));
+  }) as unknown as typeof fetch;
+  const vp = createVaaniProvider({ apiKey: 'vaani_test', fetchImpl });
+  const calls = await vp.listCalls(new Date('2026-10-01T00:00:00Z'));
+  assert.deepEqual(calls.map((c) => c.callId).sort(), ['in-1', 'in-blip', 'in-noans', 'in-pending'], 'outbound and out-of-window calls are excluded');
+  const c1 = calls.find((c) => c.callId === 'in-1')!;
+  assert.equal(c1.startedAt.toISOString(), '2026-10-07T04:00:00.000Z', 'naive timestamps are UTC');
+  assert.equal(c1.durationSec, 190, 'duration comes from the timestamps, not the bogus duration_ms');
+  assert.equal(c1.callerNumber, '+919800000001', 'caller = from_number on an inbound call');
+  assert.equal(c1.outcome, 'completed');
+  assert.equal(c1.ready, true);
+  assert.equal(calls.find((c) => c.callId === 'in-noans')!.outcome, 'missed');
+  assert.equal(calls.find((c) => c.callId === 'in-blip')!.outcome, 'missed', 'a 2-second call is treated as nobody-spoke');
+  assert.equal(calls.find((c) => c.callId === 'in-pending')!.ready, false);
+  assert.ok(seen.every((s) => s.key === 'vaani_test'), 'X-API-Key is sent on every request');
+  assert.ok(seen.every((s) => !s.url.includes('vaani_test')), 'the key never appears in a URL');
+});
+
+test('Vaani: walks history newest-first whichever way it is ordered, and stops once pages are older than the look-back', async () => {
+  const { createVaaniProvider } = await import('../lib/voice/vaani');
+  const requested: string[] = [];
+  // Ascending (oldest first) history across 3 pages: the newest call is on the LAST page.
+  const pages: Record<string, unknown[]> = {
+    '1': [vcall('a1', { Start_time: '2026-08-01T04:00:00', End_time: '2026-08-01T04:02:00' }), vcall('a2', { Start_time: '2026-08-02T04:00:00', End_time: '2026-08-02T04:02:00' })],
+    '2': [vcall('b1', { Start_time: '2026-09-01T04:00:00', End_time: '2026-09-01T04:02:00' }), vcall('b2', { Start_time: '2026-09-02T04:00:00', End_time: '2026-09-02T04:02:00' })],
+    '3': [vcall('c1', { Start_time: '2026-10-06T04:00:00', End_time: '2026-10-06T04:02:00' }), vcall('c2', { Start_time: '2026-10-07T04:00:00', End_time: '2026-10-07T04:02:00' })],
+  };
+  const fetchImpl = (async (url: string | URL) => {
+    const p = new URL(String(url)).searchParams.get('page')!;
+    requested.push(p);
+    return jsonRes(page(pages[p], Number(p), 3));
+  }) as unknown as typeof fetch;
+  const calls = await createVaaniProvider({ apiKey: 'k', fetchImpl }).listCalls(new Date('2026-10-01T00:00:00Z'));
+  assert.deepEqual(calls.map((c) => c.callId).sort(), ['c1', 'c2']);
+  assert.deepEqual(requested, ['1', '3', '2'], 'page 1 to learn the order, the newest page, then one older page to confirm it is out of the window — and no further');
+});
+
+test('Vaani: transcript labels are normalised; 404 means "not ready"; API errors surface Vaani’s own message', async () => {
+  const { createVaaniProvider, normaliseVaaniTranscript, VaaniError } = await import('../lib/voice/vaani');
+  assert.equal(
+    normaliseVaaniTranscript('AGENT: Hi, Aangan Studio.\n\n USER: Hello, I have a 3BHK in Baner.\n\n\n\nAGENT: Great.'),
+    'Front Desk: Hi, Aangan Studio.\n\nCaller: Hello, I have a 3BHK in Baner.\n\nFront Desk: Great.',
+  );
+  assert.equal(normaliseVaaniTranscript('   '), null);
+  assert.equal(normaliseVaaniTranscript(undefined), null);
+  const base = { callId: 'x', callerNumber: null, startedAt: new Date(), endedAt: null, durationSec: 60, outcome: 'completed' as const, ready: true, transcript: null, recordingUrl: null, language: null, sttConfidence: null };
+  const notReady = createVaaniProvider({ apiKey: 'k', fetchImpl: (async () => jsonRes({ detail: 'pending' }, 404)) as unknown as typeof fetch });
+  assert.equal(await notReady.loadTranscript!(base), null);
+  const ok = createVaaniProvider({ apiKey: 'k', fetchImpl: (async () => jsonRes({ transcript: 'USER: hi', status_code: 200, function: 'get_transcript' })) as unknown as typeof fetch });
+  assert.equal(await ok.loadTranscript!(base), 'Caller: hi');
+  const broken = createVaaniProvider({ apiKey: 'k', fetchImpl: (async () => jsonRes({ status_code: 500, message: 'Error fetching call history: 400: Invalid client_id format' }, 500)) as unknown as typeof fetch });
+  await assert.rejects(() => broken.listCalls(new Date(0)), (e: unknown) => e instanceof VaaniError && /Invalid client_id format/.test((e as Error).message) && (e as { status?: number }).status === 500);
+});
+
+test('Vaani sync: new calls become phone enquiries once; re-runs de-duplicate; unfinished calls wait; a call with no transcript is never lost', async () => {
+  const { runVoiceSync } = await import('../lib/voice/sync');
+  const { getStore } = await import('../lib/store');
+  const prevKey = process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_API_KEY; // exercise the AI-outage path too: the enquiry must still be captured and escalated
+  const t0 = new Date(Date.now() - 3_600_000);
+  const mk = (id: string, over: Record<string, unknown> = {}) => ({
+    callId: id, callerNumber: '+919811111111', startedAt: new Date(t0.getTime() + Number(id.slice(-1)) * 60_000), endedAt: null, durationSec: 120,
+    outcome: 'completed' as const, ready: true, transcript: null, recordingUrl: null, language: null, sttConfidence: null, ...over,
+  });
+  const fake = {
+    name: 'fake', isConfigured: () => true,
+    listCalls: async () => [mk('c1'), mk('c2', { ready: false }), mk('c3', { outcome: 'missed' as const }), mk('c4')],
+    loadTranscript: async (c: { callId: string }) => (c.callId === 'c1' ? 'Front Desk: Aangan Studio.\n\nCaller: Hi, I have a 3BHK in Baner.' : null),
+  };
+  try {
+    const r1 = (await runVoiceSync({ since: new Date(0), providers: [fake] })).fake;
+    assert.deepEqual({ created: r1.created, pending: r1.pending, dup: r1.duplicates, err: r1.errors }, { created: 3, pending: 1, dup: 0, err: [] });
+    const rows = (await getStore().load('designer')).enquiries.filter((e) => e.source_ref?.startsWith('fake:'));
+    assert.deepEqual(rows.map((e) => e.source_ref).sort(), ['fake:c1', 'fake:c3', 'fake:c4']);
+    assert.ok(rows.every((e) => e.channel === 'phone'));
+    assert.equal(rows.find((e) => e.source_ref === 'fake:c3')!.call_outcome, 'missed');
+    assert.equal(rows.find((e) => e.source_ref === 'fake:c4')!.call_outcome, 'dropped', 'completed but no transcript → recorded as a dropped call that needs a callback');
+    assert.ok(rows.find((e) => e.source_ref === 'fake:c1')!.first_response_at, 'an answered call counts as responded at its start');
+    const r2 = (await runVoiceSync({ since: new Date(0), providers: [fake] })).fake;
+    assert.deepEqual({ created: r2.created, pending: r2.pending, dup: r2.duplicates }, { created: 0, pending: 1, dup: 3 }, 'second run creates nothing new');
+  } finally {
+    if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
+  }
+});
+
+console.log('\nMetrics on the real month');
+test('September 2026: volume, channel mix, qualification split and response buckets', async () => {
+  const { getStore } = await import('../lib/store');
+  const { computeMetrics } = await import('../lib/metrics');
+  const ds = await getStore().load('designer');
+  const m = computeMetrics(ds, '2026-09', { now: NOW });
+  assert.equal(m.volume.total, 40);
+  assert.deepEqual([m.volume.byChannel.phone.n, m.volume.byChannel.whatsapp.n, m.volume.byChannel.web_form.n], [20, 10, 10]);
+  assert.deepEqual(m.qualification.counts, { qualified: 17, unqualified: 8, review: 14, not_applicable: 1 });
+  assert.equal(m.volume.missedCalls, 1);
+  assert.equal(m.response.recorded, 29, 'forms and the missed call have no recorded response — not guessed');
+  assert.equal(m.response.notRecorded, 11);
+  assert.ok(m.response.buckets[4].n >= 2, 'T16 and W08 waited > 48h');
+  assert.equal(m.response.buckets.reduce((s, b) => s + b.n, 0), 29);
+  assert.equal(m.response.conversionLift, null, 'no won/lost outcomes logged in the real data → no invented lift');
+  assert.equal(m.qualification.fpRate, 0);
+  assert.equal(m.handoff.sent, 0);
+  assert.ok(m.money.pipelineInr > 0);
+  assert.equal(m.money.wonInr, 0);
+});
+test('synthetic padding reaches ~200 and exercises every metric', async () => {
+  const { buildDataset } = await import('../data/build-dataset');
+  const { computeMetrics } = await import('../lib/metrics');
+  const d = buildDataset(new Date('2026-10-07T12:00:00+05:30'), 160);
+  assert.equal(d.enquiries.length, 200);
+  assert.equal(d.enquiries.filter((e) => e.is_synthetic).length, 160);
+  const m = computeMetrics({ ...d, transcriptCosts: d.transcripts.map((t) => ({ enquiry_id: t.enquiry_id, ai_cost_inr: t.ai_cost_inr })), demo: true }, '2026-09', { now: new Date('2026-10-07T12:00:00+05:30') });
+  assert.equal(m.volume.total, 200);
+  assert.ok(m.escalations.resolved > 10, 'resolved escalations exist');
+  assert.ok(m.handoff.sent > 20 && m.handoff.successRate !== null);
+  assert.ok(m.money.wonCount > 0 && m.money.wonInr > 0);
+  assert.ok(m.response.buckets[0].conversion !== null);
+  assert.ok(m.calendar.completed + m.calendar.scheduled > 5);
+  assert.ok(m.qualification.falseNegatives + m.qualification.grayRescued > 0);
+  // The guardrail engine, not the generator, decided every outcome — and nothing synthetic carries a price into client text.
+  assert.ok(d.enquiries.every((e) => ['qualified', 'unqualified', 'review', 'not_applicable'].includes(e.ai_qualification)));
+});
+
+// ---------------------------------------------------------------------------------------------
+Promise.all(pending).then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+});

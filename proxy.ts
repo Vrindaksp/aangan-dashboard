@@ -69,11 +69,18 @@ export function proxy(req: NextRequest) {
   // the actions themselves refuse that identity as a second line of defence. ?as=founder selects the results-only view
   // (cookie-remembered; it can only reduce access). Machine endpoints keep their bearer secrets. Unset the switch to lock
   // the designer screens behind the login again.
-  if (!cred && process.env.PUBLIC_VIEW === 'true' && (req.method === 'GET' || req.method === 'HEAD') && pathname === '/' && !wantsLogin) {
+  //
+  // PUBLIC EDIT (env PUBLIC_EDIT=true): the same, but the buttons work too — NO login anywhere on the dashboard. Anyone with
+  // the link can read everything AND change it (qualify, reject, assign, book, mark won, send emails when enabled). Only the
+  // dashboard page "/" is opened this way; every other path still needs its credentials, and the machine endpoints
+  // (/api/ingest, /api/cron) always keep their bearer secrets. Unset PUBLIC_EDIT to restore the read-only/locked behaviour.
+  const publicEdit = process.env.PUBLIC_EDIT === 'true';
+  const publicRead = process.env.PUBLIC_VIEW === 'true' && (req.method === 'GET' || req.method === 'HEAD');
+  if (!cred && pathname === '/' && !wantsLogin && (publicEdit || publicRead)) {
     const asParam = searchParams.get('as');
     const picked = asParam === 'founder' || asParam === 'designer' ? asParam : req.cookies.get('aangan_role')?.value === 'founder' ? 'founder' : 'designer';
     headers.set('x-aangan-role', picked);
-    headers.set('x-aangan-user', picked === 'founder' ? 'public' : 'viewer (read-only)');
+    headers.set('x-aangan-user', picked === 'founder' ? 'public' : publicEdit ? 'open access' : 'viewer (read-only)');
     const res = NextResponse.next({ request: { headers } });
     if (asParam === 'founder' || asParam === 'designer') res.cookies.set('aangan_role', asParam, { path: '/', sameSite: 'lax' });
     return res;

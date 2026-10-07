@@ -14,7 +14,7 @@ never be said about price; designers work the queue; Nikhil sees **only the resu
 | **Founder (Nikhil)** | Outcome numbers: volume, response-time distribution, qualification rates, handoff success, escalation & override rates, consultations, pipeline, unit economics | Transcripts, client names/phones/emails, summaries, locations, per-lead rows |
 
 This is enforced in the data layer (`lib/store.ts` strips personal data for the founder role and the Supabase query only
-selects outcome-level columns), not just by hiding tabs. **Nikhil needs no sign-in**: an anonymous visit to the site shows his results view — aggregate numbers only, no names, contact details, transcripts or locations (the founder login still works too). **Designers sign in** (Basic auth, link in the page header or `/?login=1`) for the full tool; every server action and every other path requires that login. **Public-view switch:** setting `PUBLIC_VIEW=true` (as on the current deployment) lets anyone READ the designer screens (enquiries, transcripts, escalations, calendar) with no login, while every button (a server action) still needs the designer login — a viewer sees a “View only” banner and a “Sign in to edit” button, and the results-only view stays one click away (`/?as=founder`). Ingest/cron endpoints keep their bearer keys. **Unset `PUBLIC_VIEW` before real client data flows**, which puts the designer screens back behind the login. Access rules live in `proxy.ts` and are unit-tested. Note the public page does show business totals (volume, pipeline value, revenue) to anyone with the address; to lock it again, revert the "PUBLIC RESULTS" block in `proxy.ts`.
+selects outcome-level columns), not just by hiding tabs. **Nikhil needs no sign-in**: an anonymous visit to the site shows his results view — aggregate numbers only, no names, contact details, transcripts or locations (the founder login still works too). **Designers sign in** (Basic auth, link in the page header or `/?login=1`) for the full tool; every server action and every other path requires that login. **Public-view switch:** setting `PUBLIC_VIEW=true` (as on the current deployment) lets anyone READ the designer screens (enquiries, transcripts, escalations, calendar) with no login, while every button (a server action) still needs the designer login — a viewer sees a “View only” banner and a “Sign in to edit” button, and the results-only view stays one click away (`/?as=founder`). Ingest/cron endpoints keep their bearer keys. **Unset `PUBLIC_VIEW` before real client data flows**, which puts the designer screens back behind the login. **Public-edit switch:** `PUBLIC_EDIT=true` (as on the current deployment) removes the login entirely — anyone with the link can read AND use every button (qualify, reject, assign, book, mark won, send email when enabled); only the dashboard page is opened this way, and ingest/cron keep their bearer keys. **Unset `PUBLIC_EDIT` (and `PUBLIC_VIEW`) before real client data flows.** Access rules live in `proxy.ts` and are unit-tested. Note the public page does show business totals (volume, pipeline value, revenue) to anyone with the address; to lock it again, revert the "PUBLIC RESULTS" block in `proxy.ts`.
 
 ## Quick start (no accounts needed — demo mode)
 
@@ -113,13 +113,25 @@ curl -X POST $URL/api/ingest/web-form -H "Authorization: Bearer $INGEST_API_KEY"
 
 `source_ref` de-duplicates retries. Add `"async": true` to get a `202` immediately and process in the background.
 
-## Voice calls — Vaani Labs
+## Voice calls — Vaani Voice (pull, no webhooks)
 
-Not wired yet: the API key is in `.env.local` (`VAANI_API_KEY`) but the **API reference** (base URL, list-calls endpoint, response shape) is still needed — no webhooks, by design. Note the key prefix (`vaani_…`) differs from the `vv_live_…` format on vaanilabs.in's public docs; confirm which Vaani product it belongs to before it is used. `lib/voice/provider.ts` defines the
-seam (`listCalls(since)` → transcript or recording URL); `lib/voice/vaani.ts` is a clearly-marked stub; `/api/cron/voice-sync`
-already pulls, de-duplicates (`vaani:<callId>`), transcribes recordings if needed (SSRF-guarded by `VOICE_RECORDING_HOSTS`)
-and runs the pipeline. When the API doc arrives it is one function. Until then, anything that can POST can push calls to
-`/api/ingest/call`. Voice-agent configuration guidance: [`docs/voice-agent-brief.md`](docs/voice-agent-brief.md).
+Integrated against the documented Vaani Voice REST API (`https://docs.vaanivoice.ai`: base `https://api.vaanivoice.ai`, header
+`X-API-Key: vaani_…`). We **poll** `GET /api/call-history` (inbound calls only), fetch `GET /api/transcript/{call_id}` for each
+new one, and run it through the normal pipeline (Gemini → guardrails → designer brief → HubSpot). Details that matter:
+timestamps are UTC, `duration_ms` is not milliseconds (we compute duration from the timestamps), transcript turns are
+labelled `AGENT:`/`USER:` (mapped to `Front Desk:`/`Caller:`), and a call is only ingested once Vaani's
+`post_processing_status` is `completed`. Enquiries are de-duplicated on `vaani:<call_id>`, so re-runs never double-count; a completed
+call with no transcript is recorded as a dropped call that needs a callback, never lost.
+
+* **Set `VAANI_API_KEY`** (Vercel → Environment Variables). Optional: `VAANI_BASE_URL`, `VAANI_INCLUDE_OUTBOUND=true`.
+* **Check it:** `VAANI_API_KEY=vaani_… npm run voice:check` (read-only; `-- --hours 72`, `-- --ingest` to create enquiries).
+* **When it runs:** a daily cron (`/api/cron/voice-sync`), plus a small background pull (at most every 2 minutes per server
+  instance) whenever a designer has the dashboard open. Vercel Hobby only allows daily cron; for near-real-time on a quiet
+  dashboard, point any scheduler (cron-job.org, GitHub Actions, a Pro-plan cron) at
+  `GET /api/cron/voice-sync` with `Authorization: Bearer $CRON_SECRET` every few minutes.
+* **The Vaani account must be set up first** (create an agent, set up telephony, generate the key): until the account has a client/agent,
+  Vaani's call-history returns `Invalid client_id format`, which the sync reports as an error and retries later.
+* Voice-agent configuration guidance: [`docs/voice-agent-brief.md`](docs/voice-agent-brief.md).
 
 ## Integrations
 

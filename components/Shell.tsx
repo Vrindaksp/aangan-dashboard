@@ -25,7 +25,8 @@ export const allowedViews = (role: 'designer' | 'founder'): View[] => TABS[role]
 export function Shell({ ctx, view, openEscalations, children }: { ctx: ViewCtx; view: View; openEscalations: number; children: ReactNode }) {
   const { role, sp, month, months, ds, includeSynthetic } = ctx;
   const synthetic = ds.enquiries.some((e) => e.is_synthetic);
-  const publicView = process.env.PUBLIC_VIEW === 'true';
+  const publicEdit = process.env.PUBLIC_EDIT === 'true';
+  const publicView = publicEdit || process.env.PUBLIC_VIEW === 'true';
   return (
     <div className="mx-auto max-w-[1500px] px-4 pb-16 sm:px-6">
       {/* Masthead */}
@@ -48,6 +49,9 @@ export function Shell({ ctx, view, openEscalations, children }: { ctx: ViewCtx; 
             <Link href={publicView ? '/?as=designer' : '/?login=1'} className="btn-ghost" title="Designers and front desk: open the designer screens">
               {publicView ? 'Designer view' : 'Designer sign-in'}
             </Link>
+          )}
+          {role === 'designer' && publicEdit && (
+            <Link href="/?as=founder" className="btn-ghost" title="Results only — no client details">Results view</Link>
           )}
           {ctx.readOnly && (
             <>
