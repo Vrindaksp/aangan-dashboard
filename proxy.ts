@@ -63,6 +63,20 @@ export function proxy(req: NextRequest) {
   // no names, contact details, transcripts or locations (the data layer strips them for this role). Anything else
   // without credentials (server actions, other paths, or the explicit "?login=1" sign-in link) gets the login prompt,
   // so the designers' tool is never reachable anonymously.
+  // OPEN ACCESS (env OPEN_ACCESS=true): no login anywhere. Everyone is a designer (full tool, buttons included) unless they
+  // pick the results-only view with ?as=founder (remembered in a cookie; ?as=designer switches back). Choosing "founder" can
+  // only REDUCE access, so it is safe to let anyone select it. Machine endpoints (/api/ingest, /api/cron) are untouched and
+  // still need their bearer secret. Turn the switch off to bring the logins back.
+  if (!cred && process.env.OPEN_ACCESS === 'true') {
+    const asParam = searchParams.get('as');
+    const picked = asParam === 'founder' || asParam === 'designer' ? asParam : req.cookies.get('aangan_role')?.value === 'founder' ? 'founder' : 'designer';
+    headers.set('x-aangan-role', picked);
+    headers.set('x-aangan-user', picked === 'founder' ? 'public (results view)' : 'open access');
+    const res = NextResponse.next({ request: { headers } });
+    if (asParam === 'founder' || asParam === 'designer') res.cookies.set('aangan_role', asParam, { path: '/', sameSite: 'lax' });
+    return res;
+  }
+
   if (!cred) {
     const isPageLoad = (req.method === 'GET' || req.method === 'HEAD') && pathname === '/';
     if (!isPageLoad || wantsLogin) return deny();

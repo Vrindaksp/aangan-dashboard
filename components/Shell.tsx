@@ -41,8 +41,13 @@ export function Shell({ ctx, view, openEscalations, children }: { ctx: ViewCtx; 
             {role === 'founder' ? 'Founder · results only' : 'Designer · full access'}
           </Badge>
           {role === 'founder' && (
-            <Link href="/?login=1" className="btn-ghost" title="Designers and front desk: sign in for the full working tool">
-              Designer sign-in
+            <Link href={process.env.OPEN_ACCESS === 'true' ? '/?as=designer' : '/?login=1'} className="btn-ghost" title="Designers and front desk: open the full working tool">
+              {process.env.OPEN_ACCESS === 'true' ? 'Designer view' : 'Designer sign-in'}
+            </Link>
+          )}
+          {role === 'designer' && process.env.OPEN_ACCESS === 'true' && (
+            <Link href="/?as=founder" className="btn-ghost" title="Results only — no client details">
+              Results view
             </Link>
           )}
         </div>

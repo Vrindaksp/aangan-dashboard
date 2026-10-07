@@ -391,6 +391,31 @@ test('anonymous visitors get the aggregate-only founder results page and NOTHING
   }
 });
 
+test('OPEN_ACCESS=true removes every login but keeps machine endpoints bearer-protected; results-only view stays selectable', async () => {
+  const { NextRequest } = await import('next/server');
+  const { proxy } = await import('../proxy');
+  const keep = { DESIGNER_PASSWORD: process.env.DESIGNER_PASSWORD, FOUNDER_PASSWORD: process.env.FOUNDER_PASSWORD, OPEN_ACCESS: process.env.OPEN_ACCESS };
+  Object.assign(process.env, { DESIGNER_PASSWORD: 'dpw', FOUNDER_PASSWORD: 'fpw', OPEN_ACCESS: 'true' });
+  const run = (path: string, init: { method?: string; headers?: Record<string, string> } = {}) => proxy(new NextRequest(`https://x.test${path}`, init));
+  const role = (r: Response) => r.headers.get('x-middleware-request-x-aangan-role');
+  try {
+    assert.equal(role(run('/')), 'designer', 'no login → full tool');
+    assert.equal(run('/', { method: 'POST' }).status, 200, 'buttons (server actions) work without a login');
+    assert.equal(role(run('/?view=queue')), 'designer');
+    const pickF = run('/?as=founder');
+    assert.equal(role(pickF), 'founder', '?as=founder selects the results-only view');
+    assert.match(pickF.headers.get('set-cookie') ?? '', /aangan_role=founder/);
+    assert.equal(role(run('/', { headers: { cookie: 'aangan_role=founder' } })), 'founder', 'the choice is remembered');
+    assert.equal(role(run('/', { headers: { cookie: 'aangan_role=nonsense' } })), 'designer', 'junk cookies fall back to the default');
+    assert.equal(role(run('/', { headers: { 'x-aangan-role': 'founder' } })), 'designer', 'a spoofed role header is still ignored');
+    assert.equal(run('/api/ingest/call', { method: 'POST' }).headers.get('x-middleware-request-x-aangan-role'), null, 'machine endpoints get no role — they check their own bearer key');
+    process.env.OPEN_ACCESS = 'false';
+    assert.equal(run('/', { method: 'POST' }).status, 401, 'switch off → logins are back');
+  } finally {
+    for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
 console.log('\nMetrics on the real month');
 test('September 2026: volume, channel mix, qualification split and response buckets', async () => {
   const { getStore } = await import('../lib/store');
