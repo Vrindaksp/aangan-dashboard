@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------------------------------
+   Design tokens — "architectural drawing, after dark": near-black sheet, bone-white linework,
+   one hot vermilion accent. Status colours are reserved for state and always paired with text.
+   RGB triplets so Tailwind opacity modifiers work (bg-accent/10).
+   ------------------------------------------------------------------------------------------ */
+:root {
+  --ink: 10 10 11;        /* page */
+  --panel: 17 17 19;      /* cards */
+  --raised: 26 26 29;     /* inputs, hovered rows */
+  --line: 44 44 49;       /* grid lines */
+  --rule: 242 239 232;    /* bold rules (bone) */
+  --bone: 242 239 232;    /* primary text */
+  --mute: 160 157 148;    /* secondary text   (AA on --panel) */
+  --dim: 115 112 104;     /* tertiary / disabled — never for essential info */
+  --accent: 255 90 31;    /* vermilion */
+  --ok: 61 220 151;
+  --warn: 255 194 51;
+  --crit: 255 77 106;
+  --info: 106 167 255;
+  color-scheme: dark;
+}
+
+html { background: rgb(var(--ink)); }
+body {
+  margin: 0;
+  color: rgb(var(--bone));
+  background-color: rgb(var(--ink));
+  /* faint drafting grid */
+  background-image:
+    linear-gradient(rgb(var(--line) / 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--line) / 0.28) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-attachment: fixed;
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: rgb(var(--accent)); color: rgb(var(--ink)); }
+
+@layer components {
+  /* Cards: hard 1px line, square corners, a thin accent tab when "hot". */
+  .panel { @apply border border-line bg-panel; }
+  .panel-hot { @apply border border-line bg-panel border-t-2 border-t-accent; }
+  .label { @apply font-mono text-[11px] uppercase tracking-arch text-mute; }
+  .num { @apply font-display font-bold tabular-nums tracking-tight; }
+  .mono { @apply font-mono tabular-nums; }
+
+  .btn { @apply inline-flex items-center justify-center gap-2 border border-rule bg-transparent px-3 py-1.5 font-mono text-[11px] uppercase tracking-arch text-bone transition-colors hover:bg-bone hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40; }
+  .btn-solid { @apply btn border-accent bg-accent text-ink hover:border-bone hover:bg-bone; }
+  .btn-ghost { @apply btn border-line text-mute hover:border-bone hover:bg-transparent hover:text-bone; }
+  .btn-danger { @apply btn border-crit/70 text-crit hover:border-crit hover:bg-crit hover:text-ink; }
+
+  .field { @apply w-full border border-line bg-raised px-2.5 py-1.5 text-sm text-bone placeholder:text-dim focus:border-accent focus:outline-none; }
+  .th { @apply border-b border-rule px-3 py-2 text-left font-mono text-[11px] font-normal uppercase tracking-arch text-mute; }
+  .td { @apply border-b border-line px-3 py-2.5 align-top text-sm; }
+}
+
+/* Thin, quiet scrollbars for the transcript panes */
+.scroll-thin { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+details > summary { list-style: none; cursor: pointer; }
+details > summary::-webkit-details-marker { display: none; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

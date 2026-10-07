@@ -1,0 +1,74 @@
+// Access control for the whole dashboard (Next 16 "proxy", formerly middleware).
+//
+// Two roles via HTTP Basic auth:
+//   designer — full working tool (transcripts, escalations, briefs, calendar, emails)
+//   founder  — end results only (aggregate metrics; the data layer also strips personal data for this role)
+//
+// /api/ingest/* and /api/cron/* are machine endpoints: they skip Basic auth and check a bearer secret themselves.
+// In production the app REFUSES to serve unless both passwords are configured. Locally (no passwords) it runs open,
+// and you can preview each role with  ?as=founder  /  ?as=designer.
+
+import { NextResponse, type NextRequest } from 'next/server';
+
+const enc = new TextEncoder();
+function safeEqual(a: string, b: string): boolean {
+  const x = enc.encode(a), y = enc.encode(b);
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
+function parseBasic(header: string | null): { user: string; pass: string } | null {
+  if (!header?.startsWith('Basic ')) return null;
+  try {
+    const [user, ...rest] = atob(header.slice(6)).split(':');
+    return { user, pass: rest.join(':') };
+  } catch {
+    return null;
+  }
+}
+
+const deny = () =>
+  new NextResponse('Authentication required', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="Aangan Studio", charset="UTF-8"' } });
+
+export function proxy(req: NextRequest) {
+  const { pathname, searchParams } = req.nextUrl;
+  const headers = new Headers(req.headers);
+  headers.delete('x-aangan-role'); // never trust a client-supplied role
+  headers.delete('x-aangan-user');
+
+  if (pathname.startsWith('/api/ingest') || pathname.startsWith('/api/cron')) return NextResponse.next({ request: { headers } });
+
+  const designerPass = process.env.DESIGNER_PASSWORD;
+  const founderPass = process.env.FOUNDER_PASSWORD;
+  const prod = process.env.NODE_ENV === 'production';
+
+  // Local / demo: open, with a role switcher.
+  if (!designerPass && !founderPass) {
+    if (prod) return new NextResponse('Dashboard locked: set DESIGNER_PASSWORD and FOUNDER_PASSWORD in the environment.', { status: 503 });
+    const asParam = searchParams.get('as');
+    const role = asParam === 'founder' || asParam === 'designer' ? asParam : req.cookies.get('aangan_role')?.value === 'founder' ? 'founder' : 'designer';
+    headers.set('x-aangan-role', role);
+    headers.set('x-aangan-user', role === 'founder' ? 'founder (local)' : 'designer (local)');
+    const res = NextResponse.next({ request: { headers } });
+    if (asParam) res.cookies.set('aangan_role', role, { path: '/', sameSite: 'lax' });
+    return res;
+  }
+
+  const cred = parseBasic(req.headers.get('authorization'));
+  if (!cred) return deny();
+  const dUser = process.env.DESIGNER_USER || 'designer';
+  const fUser = process.env.FOUNDER_USER || 'nikhil';
+  let role: 'designer' | 'founder' | null = null;
+  if (designerPass && safeEqual(cred.user, dUser) && safeEqual(cred.pass, designerPass)) role = 'designer';
+  else if (founderPass && safeEqual(cred.user, fUser) && safeEqual(cred.pass, founderPass)) role = 'founder';
+  if (!role) return deny();
+
+  headers.set('x-aangan-role', role);
+  headers.set('x-aangan-user', cred.user);
+  return NextResponse.next({ request: { headers } });
+}
+
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|icon.svg).*)'],
+};
