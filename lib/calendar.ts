@@ -9,6 +9,7 @@
 // Outward-facing safety: the CLIENT is only added as a Google attendee (which makes Google email them) when
 // GOOGLE_INVITE_CLIENT=true. Default is to send the .ics via the reviewed confirmation email instead.
 
+import { createSign } from 'node:crypto';
 import { BUSINESS_HOURS } from './config';
 import { istParts } from './guardrails';
 import type { ConsultationRow } from './types';
@@ -145,18 +146,53 @@ const G = {
   calendarId: () => process.env.GOOGLE_CALENDAR_ID || 'primary',
 };
 
-export const isGoogleCalendarConfigured = () => Boolean(G.clientId() && G.clientSecret() && G.refreshToken());
+// Two ways to authenticate (service account preferred — it never expires):
+//   1. GOOGLE_SERVICE_ACCOUNT_JSON  — the downloaded key file, raw JSON or base64. Share the studio calendar with the
+//      service account's email ("Make changes to events"). Service accounts cannot invite attendees, so in this mode
+//      events carry the designer's name in the description instead of an invite.
+//   2. GOOGLE_CLIENT_ID / _SECRET / _REFRESH_TOKEN — OAuth as a real user (can invite attendees; note refresh tokens of
+//      apps left in "Testing" mode expire after 7 days).
+export interface ServiceAccount { email: string; key: string }
+
+export function readServiceAccount(raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON): ServiceAccount | null {
+  if (!raw?.trim()) return null;
+  try {
+    const text = raw.trim().startsWith('{') ? raw : Buffer.from(raw.trim(), 'base64').toString('utf8');
+    const j = JSON.parse(text) as { client_email?: string; private_key?: string };
+    return j.client_email && j.private_key ? { email: j.client_email, key: j.private_key } : null;
+  } catch {
+    return null;
+  }
+}
+
+const b64u = (b: Buffer | string) => Buffer.from(b).toString('base64url');
+
+/** Signed JWT assertion (RS256) for Google's service-account token exchange. Exported for testing. */
+export function buildServiceAccountJwt(sa: ServiceAccount, nowSec = Math.floor(Date.now() / 1000)): string {
+  const head = b64u(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64u(JSON.stringify({
+    iss: sa.email, scope: 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', iat: nowSec, exp: nowSec + 3600,
+  }));
+  const sig = createSign('RSA-SHA256').update(`${head}.${claim}`).sign(sa.key);
+  return `${head}.${claim}.${b64u(sig)}`;
+}
+
+export const googleMode = (): 'service_account' | 'oauth' | null =>
+  readServiceAccount() ? 'service_account' : G.clientId() && G.clientSecret() && G.refreshToken() ? 'oauth' : null;
+
+export const isGoogleCalendarConfigured = () => googleMode() !== null;
 
 let tokenCache: { token: string; exp: number } | null = null;
 
 async function accessToken(): Promise<string> {
   if (tokenCache && tokenCache.exp > Date.now() + 30_000) return tokenCache.token;
+  const sa = readServiceAccount();
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: G.clientId()!, client_secret: G.clientSecret()!, refresh_token: G.refreshToken()!, grant_type: 'refresh_token',
-    }),
+    body: sa
+      ? new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: buildServiceAccountJwt(sa) })
+      : new URLSearchParams({ client_id: G.clientId()!, client_secret: G.clientSecret()!, refresh_token: G.refreshToken()!, grant_type: 'refresh_token' }),
   });
   const j = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error_description?: string };
   if (!res.ok || !j.access_token) throw new Error(`Google auth failed: ${j.error_description ?? res.status}`);
@@ -170,10 +206,12 @@ export async function createGoogleEvent(e: {
   summary: string; description?: string; location?: string; start: Date; end: Date; attendeeEmails?: string[];
 }): Promise<CalResult> {
   if (!isGoogleCalendarConfigured()) return { ok: false, error: 'Google Calendar not configured' };
+  // Service accounts can't invite attendees (Google rejects it) — drop them in that mode.
+  const attendees = googleMode() === 'oauth' ? e.attendeeEmails : undefined;
   try {
     const token = await accessToken();
     const res = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(G.calendarId())}/events?sendUpdates=${e.attendeeEmails?.length ? 'all' : 'none'}`,
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(G.calendarId())}/events?sendUpdates=${attendees?.length ? 'all' : 'none'}`,
       {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -183,7 +221,7 @@ export async function createGoogleEvent(e: {
           location: e.location,
           start: { dateTime: e.start.toISOString(), timeZone: TZ },
           end: { dateTime: e.end.toISOString(), timeZone: TZ },
-          attendees: e.attendeeEmails?.map((email) => ({ email })),
+          attendees: attendees?.map((email) => ({ email })),
           reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 60 }, { method: 'popup', minutes: 1440 }] },
         }),
       },

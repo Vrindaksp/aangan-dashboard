@@ -293,6 +293,31 @@ test('a SAMPLE designer can never appear in a LIVE client email; assignment spre
   assert.notEqual(big!.role, 'designer', 'large projects go to a senior designer or the principal');
 });
 
+test('Google service-account auth: JWT is a valid RS256 signature with the right claims; key parsing accepts raw JSON or base64', async () => {
+  const { generateKeyPairSync, createVerify } = await import('node:crypto');
+  const { buildServiceAccountJwt, readServiceAccount, googleMode } = await import('../lib/calendar');
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const sa = { email: 'bot@proj.iam.gserviceaccount.com', key: pem };
+  const jwt = buildServiceAccountJwt(sa, 1_700_000_000);
+  const [h, c, s] = jwt.split('.');
+  assert.deepEqual(JSON.parse(Buffer.from(h, 'base64url').toString()), { alg: 'RS256', typ: 'JWT' });
+  const claim = JSON.parse(Buffer.from(c, 'base64url').toString());
+  assert.equal(claim.iss, sa.email);
+  assert.equal(claim.aud, 'https://oauth2.googleapis.com/token');
+  assert.equal(claim.scope, 'https://www.googleapis.com/auth/calendar');
+  assert.equal(claim.exp - claim.iat, 3600);
+  assert.ok(createVerify('RSA-SHA256').update(`${h}.${c}`).verify(publicKey, Buffer.from(s, 'base64url')), 'signature verifies with the public key');
+  const json = JSON.stringify({ client_email: sa.email, private_key: pem });
+  assert.equal(readServiceAccount(json)?.email, sa.email);
+  assert.equal(readServiceAccount(Buffer.from(json).toString('base64'))?.email, sa.email);
+  assert.equal(readServiceAccount('not json'), null);
+  assert.equal(readServiceAccount('{"client_email":"x"}'), null);
+  const prev = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  process.env.GOOGLE_SERVICE_ACCOUNT_JSON = json;
+  try { assert.equal(googleMode(), 'service_account'); } finally { if (prev === undefined) delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON; else process.env.GOOGLE_SERVICE_ACCOUNT_JSON = prev; }
+});
+
 console.log('\nHubSpot sync (payloads only — no network)');
 test('only worthwhile leads are synced; masked phones and placeholders never reach the CRM', () => {
   const row = (ref: string) => {
