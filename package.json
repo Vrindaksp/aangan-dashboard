@@ -15,7 +15,8 @@
     "ingest:demo": "tsx scripts/ingest-demo.ts",
     "seed:sql": "tsx scripts/export-seed-sql.ts",
     "smoke": "tsx scripts/live-smoke.ts",
-    "designers:mock": "tsx scripts/designers-mock.ts"
+    "designers:mock": "tsx scripts/designers-mock.ts",
+    "hubspot:check": "tsx scripts/hubspot-check.ts"
   },
   "dependencies": {
     "@google/genai": "^2.27.0",
