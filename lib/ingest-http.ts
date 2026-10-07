@@ -95,6 +95,13 @@ export async function handleIngest(req: Request, channel: Channel): Promise<Resp
     return Response.json({ error: msg }, { status: 400 });
   }
 
+  // An empty payload must be rejected, not recorded as a phantom "AI failed" enquiry. Allowed: message text, audio,
+  // a recording reference, or a call that never connected (missed / dropped — nothing to transcribe).
+  const hasContent = Boolean(input.text || input.audio || input.audioUrl) || input.callOutcome === 'missed' || input.callOutcome === 'dropped';
+  if (!hasContent) {
+    return Response.json({ error: 'Nothing to process: send text (or thread / fields), an audio file, a recording_url, or outcome "missed"/"dropped".' }, { status: 400 });
+  }
+
   if (wantsAsync) {
     after(async () => {
       try { await processEnquiry(input); } catch (e) { console.error('ingest (async) failed', e); }
