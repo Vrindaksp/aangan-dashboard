@@ -13,7 +13,8 @@
     "seed:reset": "tsx scripts/seed.ts --reset",
     "gemini:check": "tsx scripts/gemini-check.ts",
     "ingest:demo": "tsx scripts/ingest-demo.ts",
-    "seed:sql": "tsx scripts/export-seed-sql.ts"
+    "seed:sql": "tsx scripts/export-seed-sql.ts",
+    "smoke": "tsx scripts/live-smoke.ts"
   },
   "dependencies": {
     "@google/genai": "^2.27.0",

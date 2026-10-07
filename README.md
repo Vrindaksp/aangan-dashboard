@@ -32,6 +32,7 @@ works; changes reset on restart). Preview each role locally with `/?as=designer`
 npm test                       # 70+ checks: the rules reproduce Nikhil's expected outcome for all 40 real enquiries
 npm run typecheck
 npm run gemini:check -- T10    # live Gemini call on one real enquiry, diffed against the expected result
+NEXT_PUBLIC_SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… npm run smoke   # drives the full designer workflow on a REAL Supabase with a throwaway enquiry, then deletes it
 npm run ingest:demo            # 3 sample enquiries through the REAL pipeline: clear lead, garbled call (held by the gate), high-value fringe
 ```
 
