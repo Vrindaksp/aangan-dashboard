@@ -3,7 +3,7 @@ import type { Role } from '@/lib/store';
 import type { Dataset } from '@/lib/types';
 import type { SP } from '@/lib/url';
 
-export type View = 'overview' | 'queue' | 'escalations' | 'calendar' | 'pricing';
+export type View = 'overview' | 'queue' | 'calls' | 'escalations' | 'calendar' | 'pricing';
 
 /** Everything a view needs. Built once in app/page.tsx. */
 export interface ViewCtx {

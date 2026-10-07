@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireDesigner } from '@/lib/auth';
 import { getStore } from '@/lib/store';
+import { runVoiceSync, voiceSyncConfigured } from '@/lib/voice/sync';
 import * as wf from '@/lib/workflow';
 import type { ConsultationMode, EmailTemplate } from '@/lib/types';
 
@@ -112,4 +113,18 @@ export async function sendClientEmailAction(f: FormData) {
     designerId: opt(f, 'designer_id'), callbackAt: ist(opt(f, 'callback')), question: opt(f, 'question'), note: opt(f, 'note')?.slice(0, 600) ?? null,
   }, actor);
   back(f, r);
+}
+
+export async function syncCallsAction(f: FormData) {
+  await requireDesigner();
+  if (!voiceSyncConfigured()) return back(f, { ok: false, message: 'The voice agent is not connected yet, so there are no calls to pull in.' });
+  const res = await runVoiceSync({ since: new Date(Date.now() - 7 * 24 * 3_600_000), maxCalls: 20 });
+  const all = Object.values(res);
+  const created = all.reduce((n, r) => n + r.created, 0);
+  const pending = all.reduce((n, r) => n + r.pending, 0);
+  const errors = all.flatMap((r) => r.errors);
+  if (errors.length > 0 && created === 0) return back(f, { ok: false, message: `Could not reach the voice agent: ${errors[0].slice(0, 160)}` });
+  const parts = [created === 0 ? 'No new calls.' : `${created} new call${created === 1 ? '' : 's'} added.`];
+  if (pending > 0) parts.push(`${pending} still being processed — try again in a minute.`);
+  back(f, { ok: true, message: parts.join(' ') });
 }

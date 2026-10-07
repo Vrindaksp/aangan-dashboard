@@ -2,6 +2,7 @@ import { after } from 'next/server';
 import { Shell, allowedViews } from '@/components/Shell';
 import type { View, ViewCtx } from '@/components/types';
 import { Calendar } from '@/components/views/Calendar';
+import { Calls } from '@/components/views/Calls';
 import { Escalations } from '@/components/views/Escalations';
 import { Overview } from '@/components/views/Overview';
 import { PricingEconomics } from '@/components/views/PricingEconomics';
@@ -39,6 +40,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
       {view === 'overview' && <Overview ctx={ctx} />}
       {view === 'pricing' && <PricingEconomics ctx={ctx} />}
       {role === 'designer' && view === 'queue' && <Queue ctx={ctx} />}
+      {role === 'designer' && view === 'calls' && <Calls ctx={ctx} />}
       {role === 'designer' && view === 'escalations' && <Escalations ctx={ctx} />}
       {role === 'designer' && view === 'calendar' && <Calendar ctx={ctx} />}
     </Shell>

@@ -19,6 +19,9 @@ export interface SyncSummary {
   errors: string[];
 }
 
+/** The most recent sync this server instance ran (in memory only — shown on the Calls tab as a hint, not a source of truth). */
+export let lastSync: { at: Date; summary: Record<string, SyncSummary> } | null = null;
+
 export const DEFAULT_PROVIDERS: VoiceProvider[] = [vaani];
 
 export async function runVoiceSync(opts: { since?: Date; maxCalls?: number; providers?: VoiceProvider[] } = {}): Promise<Record<string, SyncSummary>> {
@@ -67,6 +70,7 @@ export async function runVoiceSync(opts: { since?: Date; maxCalls?: number; prov
       }
     }
   }
+  lastSync = { at: new Date(), summary: result };
   return result;
 }
 

@@ -6,10 +6,11 @@ import { LiveRefresh } from './LiveRefresh';
 import { Flash } from './ui';
 import type { View, ViewCtx } from './types';
 
-// Four tabs for designers; the money details ("pricing") hang off the Results page rather than being a tab of their own.
+// Five tabs for designers; the money details ("pricing") hang off the Results page rather than being a tab of their own.
 const TABS: Record<'designer' | 'founder', { view: View; label: string }[]> = {
   designer: [
     { view: 'queue', label: 'Inbox' },
+    { view: 'calls', label: 'Calls' },
     { view: 'escalations', label: 'Needs attention' },
     { view: 'calendar', label: 'Calendar' },
     { view: 'overview', label: 'Results' },
@@ -18,7 +19,7 @@ const TABS: Record<'designer' | 'founder', { view: View; label: string }[]> = {
 };
 
 export const allowedViews = (role: 'designer' | 'founder'): View[] =>
-  role === 'designer' ? ['queue', 'escalations', 'calendar', 'overview', 'pricing'] : ['overview', 'pricing'];
+  role === 'designer' ? ['queue', 'calls', 'escalations', 'calendar', 'overview', 'pricing'] : ['overview', 'pricing'];
 
 export function Shell({ ctx, view, openEscalations, children }: { ctx: ViewCtx; view: View; openEscalations: number; children: ReactNode }) {
   const { role, sp, month, months, ds, includeSynthetic } = ctx;
