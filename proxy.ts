@@ -1,8 +1,9 @@
 // Access control for the whole dashboard (Next 16 "proxy", formerly middleware).
 //
-// Two roles via HTTP Basic auth:
-//   designer — full working tool (transcripts, escalations, briefs, calendar, emails)
-//   founder  — end results only (aggregate metrics; the data layer also strips personal data for this role)
+// Two roles:
+//   designer — full working tool (transcripts, escalations, briefs, calendar, emails). HTTP Basic auth REQUIRED.
+//   founder  — end results only (aggregate metrics; the data layer also strips personal data for this role).
+//              Nikhil needs NO sign-in: an anonymous page load of "/" shows this view (the founder login still works).
 //
 // /api/ingest/* and /api/cron/* are machine endpoints: they skip Basic auth and check a bearer secret themselves.
 // In production the app REFUSES to serve unless both passwords are configured. Locally (no passwords) it runs open,
@@ -56,13 +57,32 @@ export function proxy(req: NextRequest) {
   }
 
   const cred = parseBasic(req.headers.get('authorization'));
-  if (!cred) return deny();
+  const wantsLogin = searchParams.get('login') === '1';
+
+  // PUBLIC RESULTS: with no credentials, a plain page load of "/" shows the founder's results view — aggregates only,
+  // no names, contact details, transcripts or locations (the data layer strips them for this role). Anything else
+  // without credentials (server actions, other paths, or the explicit "?login=1" sign-in link) gets the login prompt,
+  // so the designers' tool is never reachable anonymously.
+  if (!cred) {
+    const isPageLoad = (req.method === 'GET' || req.method === 'HEAD') && pathname === '/';
+    if (!isPageLoad || wantsLogin) return deny();
+    headers.set('x-aangan-role', 'founder');
+    headers.set('x-aangan-user', 'public');
+    return NextResponse.next({ request: { headers } });
+  }
   const dUser = process.env.DESIGNER_USER || 'designer';
   const fUser = process.env.FOUNDER_USER || 'nikhil';
   let role: 'designer' | 'founder' | null = null;
   if (designerPass && safeEqual(cred.user, dUser) && safeEqual(cred.pass, designerPass)) role = 'designer';
   else if (founderPass && safeEqual(cred.user, fUser) && safeEqual(cred.pass, founderPass)) role = 'founder';
   if (!role) return deny();
+
+  // After a successful "?login=1" sign-in, drop the parameter so the address bar is clean.
+  if (wantsLogin) {
+    const clean = req.nextUrl.clone();
+    clean.searchParams.delete('login');
+    return NextResponse.redirect(clean);
+  }
 
   headers.set('x-aangan-role', role);
   headers.set('x-aangan-user', cred.user);

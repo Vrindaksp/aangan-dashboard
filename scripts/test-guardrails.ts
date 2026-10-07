@@ -362,6 +362,35 @@ test('founder dataset has no names, contact details, summaries, locations, trans
   assert.ok(d.enquiries.some((e) => e.client_name === 'Priya'));
 });
 
+console.log('\nAccess rules (proxy.ts)');
+test('anonymous visitors get the aggregate-only founder results page and NOTHING else', async () => {
+  const { NextRequest } = await import('next/server');
+  const { proxy } = await import('../proxy');
+  const env = { DESIGNER_PASSWORD: 'dpw', FOUNDER_PASSWORD: 'fpw', NODE_ENV: process.env.NODE_ENV };
+  const prev = { ...env, DESIGNER_USER: process.env.DESIGNER_USER, FOUNDER_USER: process.env.FOUNDER_USER };
+  Object.assign(process.env, { DESIGNER_PASSWORD: 'dpw', FOUNDER_PASSWORD: 'fpw' });
+  const basic = (u: string, p: string) => ({ authorization: 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64') });
+  const run = (path: string, init: { method?: string; headers?: Record<string, string> } = {}) => proxy(new NextRequest(`https://x.test${path}`, init));
+  const role = (r: Response) => r.headers.get('x-middleware-request-x-aangan-role');
+  try {
+    const anon = run('/');
+    assert.equal(anon.status, 200);
+    assert.equal(role(anon), 'founder', 'anonymous page load = founder (aggregate-only) view');
+    assert.equal(role(run('/?view=pricing&month=2026-09')), 'founder');
+    assert.equal(run('/?login=1').status, 401, 'explicit sign-in link prompts for a login');
+    assert.equal(run('/', { method: 'POST' }).status, 401, 'server actions need a login');
+    assert.equal(run('/anything-else').status, 401, 'other paths need a login');
+    assert.equal(run('/', { headers: { 'x-aangan-role': 'designer' } }).headers.get('x-middleware-request-x-aangan-role'), 'founder', 'a spoofed role header is ignored');
+    assert.equal(role(run('/', { headers: basic('designer', 'dpw') })), 'designer');
+    assert.equal(role(run('/', { headers: basic('nikhil', 'fpw') })), 'founder');
+    assert.equal(run('/', { headers: basic('designer', 'wrong') }).status, 401, 'wrong credentials are refused, not downgraded to public');
+    assert.equal(run('/?login=1&view=queue', { headers: basic('designer', 'dpw') }).status, 307, 'after signing in, the login parameter is stripped');
+    assert.equal(run('/api/ingest/call', { method: 'POST' }).status, 200, 'machine endpoints do their own bearer check');
+  } finally {
+    for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
 console.log('\nMetrics on the real month');
 test('September 2026: volume, channel mix, qualification split and response buckets', async () => {
   const { getStore } = await import('../lib/store');

@@ -40,6 +40,11 @@ export function Shell({ ctx, view, openEscalations, children }: { ctx: ViewCtx; 
           <Badge tone={role === 'founder' ? 'info' : 'accent'} title={role === 'founder' ? 'Outcome-level numbers only — no transcripts or client details' : 'Full working access'}>
             {role === 'founder' ? 'Founder · results only' : 'Designer · full access'}
           </Badge>
+          {role === 'founder' && (
+            <Link href="/?login=1" className="btn-ghost" title="Designers and front desk: sign in for the full working tool">
+              Designer sign-in
+            </Link>
+          )}
         </div>
       </header>
 

@@ -14,7 +14,7 @@ never be said about price; designers work the queue; Nikhil sees **only the resu
 | **Founder (Nikhil)** | Outcome numbers: volume, response-time distribution, qualification rates, handoff success, escalation & override rates, consultations, pipeline, unit economics | Transcripts, client names/phones/emails, summaries, locations, per-lead rows |
 
 This is enforced in the data layer (`lib/store.ts` strips personal data for the founder role and the Supabase query only
-selects outcome-level columns), not just by hiding tabs. Two Basic-auth logins in `proxy.ts`.
+selects outcome-level columns), not just by hiding tabs. **Nikhil needs no sign-in**: an anonymous visit to the site shows his results view — aggregate numbers only, no names, contact details, transcripts or locations (the founder login still works too). **Designers sign in** (Basic auth, link in the page header or `/?login=1`) for the full tool; every server action and every other path requires that login. Access rules live in `proxy.ts` and are unit-tested. Note the public page does show business totals (volume, pipeline value, revenue) to anyone with the address; to lock it again, revert the "PUBLIC RESULTS" block in `proxy.ts`.
 
 ## Quick start (no accounts needed — demo mode)
 
