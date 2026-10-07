@@ -38,9 +38,12 @@ npm run ingest:demo            # 3 sample enquiries through the REAL pipeline: c
 ## Set up Supabase
 
 1. Create a project (choose **ap-south-1 Mumbai**, matching Vercel's `bom1`).
-2. SQL editor → paste and run [`supabase/schema.sql`](supabase/schema.sql) (idempotent; RLS on, **no** public policies).
-3. Put `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`. The service-role key is server-only.
-4. Seed:
+2. **Easiest — no CLI:** SQL editor → New query → paste the whole of [`supabase/setup-and-seed.sql`](supabase/setup-and-seed.sql)
+   (schema + the 40 real enquiries, designers, tool costs) → Run. It is atomic: it aborts and changes nothing if `enquiries`
+   already has data. Regenerate it any time with `npm run seed:sql` (add `-- --synthetic 160` for simulated rows).
+   *Or* run just [`supabase/schema.sql`](supabase/schema.sql) (idempotent; RLS on, **no** public policies) and seed from the CLI (step 4).
+3. Put `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (Project Settings → API; server-only) in `.env.local` and in Vercel.
+4. CLI seeding (alternative to the SQL paste):
    ```bash
    npm run seed                          # the 40 real enquiries + designer directory + tool costs
    npm run seed -- --synthetic 160       # optional: + 160 simulated (is_synthetic) → ~200 for the month
