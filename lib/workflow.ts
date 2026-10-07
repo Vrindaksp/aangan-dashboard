@@ -23,9 +23,7 @@ const iso = (d = new Date()) => d.toISOString();
 
 /** Least-loaded active designer. Big / founder-connected leads prefer senior designers and the principal. */
 export async function pickDesigner(store: Store, e: Pick<EnquiryRow, 'priority_flags'>): Promise<DesignerRow | null> {
-  const [designers, load] = await Promise.all([store.listDesigners(), store.designerLoad()]);
-  const real = designers.filter((d) => !d.is_sample || designers.every((x) => x.is_sample));
-  const pool0 = real.length ? real : designers;
+  const [pool0, load] = await Promise.all([store.listDesigners(), store.designerLoad()]);
   const senior = e.priority_flags.includes('large_project') || e.priority_flags.includes('founder_connection');
   const pool = senior && pool0.some((d) => d.role !== 'designer') ? pool0.filter((d) => d.role !== 'designer') : pool0;
   return [...pool].sort((a, b) => (load[a.id] ?? 0) - (load[b.id] ?? 0) || a.name.localeCompare(b.name))[0] ?? null;
@@ -277,6 +275,10 @@ export async function sendEmailToClient(
   if (!prep) return fail('Enquiry not found.');
   if (!prep.to) return fail('No valid email address on this enquiry.');
   if (prep.composed.blockers.length) return fail(`Not sent: ${prep.composed.blockers.join(' ')}`);
+  // A placeholder designer has fake contact details — never let one reach a real client.
+  if (prep.designer?.is_sample && process.env.CLIENT_EMAIL_MODE === 'live') {
+    return fail(`Not sent: ${prep.designer.name} is a sample designer with placeholder contact details. Assign a real designer first.`);
+  }
   const e = (await store.getEnquiry(enquiryId))!;
 
   const attachments = prep.consultation && template === 'confirmation' && prep.designer

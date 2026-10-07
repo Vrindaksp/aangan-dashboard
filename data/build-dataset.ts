@@ -24,23 +24,36 @@ export interface SeedDataset {
 const ist = (s: string) => new Date(s.replace(' ', 'T') + ':00+05:30');
 
 /**
- * Designer directory. "Aryan" is named in the source (T09); the rest are PLACEHOLDERS (is_sample) with reserved
- * .example emails / fake numbers so nothing can ever be sent to them. Replace with the real 14 designers.
+ * Mock designer roster: the studio has 14 designers. "Aryan" is named in the source (T09) and is the one real entry
+ * (no contact details known). The other 13 are FICTIONAL (is_sample) with reserved .example emails and fake numbers,
+ * so nothing can ever be delivered to them, and the app refuses to put a sample designer in a LIVE client email.
+ * Replace them with the real team before go-live (Supabase → Table Editor → designers).
  */
+const MOCK_ROSTER: [string, DesignerRow['role']][] = [
+  ['Kavita Rane', 'principal'],
+  ['Rohan Deshmukh', 'senior_designer'],
+  ['Ishita Bhatt', 'senior_designer'],
+  ['Siddhi Patwardhan', 'designer'],
+  ['Neel Gokhale', 'designer'],
+  ['Tanvi Joglekar', 'designer'],
+  ['Aditya Ranade', 'designer'],
+  ['Shreya Sathe', 'designer'],
+  ['Varun Karmarkar', 'designer'],
+  ['Mrunal Bapat', 'designer'],
+  ['Pranav Limaye', 'designer'],
+  ['Diya Phadke', 'designer'],
+  ['Omkar Tilak', 'designer'],
+];
+
 export function sampleDesigners(now: Date): DesignerRow[] {
-  const mk = (name: string, role: DesignerRow['role'], i: number, sample: boolean): DesignerRow => ({
-    id: randomUUID(), name, role, active: true, is_sample: sample, created_at: now.toISOString(),
-    email: sample ? `designer${i}@aangan.example` : null,
-    phone: sample ? `+91 90000 000${String(i).padStart(2, '0')}` : null,
-  });
-  return [
-    mk('Aryan', 'senior_designer', 0, false),
-    mk('Sample Designer A', 'designer', 1, true),
-    mk('Sample Designer B', 'designer', 2, true),
-    mk('Sample Designer C', 'designer', 3, true),
-    mk('Sample Designer D', 'senior_designer', 4, true),
-    mk('Sample Principal', 'principal', 5, true),
-  ];
+  const created = now.toISOString();
+  const aryan: DesignerRow = { id: randomUUID(), name: 'Aryan', role: 'senior_designer', active: true, is_sample: false, created_at: created, email: null, phone: null };
+  const mocks = MOCK_ROSTER.map(([name, role], i): DesignerRow => ({
+    id: randomUUID(), name, role, active: true, is_sample: true, created_at: created,
+    email: `${name.toLowerCase().replace(/\s+/g, '.')}@aangan.example`,
+    phone: `+91 90000 00${String(101 + i)}`,
+  }));
+  return [aryan, ...mocks];
 }
 
 /** Fixed monthly costs of running the system (₹). ESTIMATES — replace with real invoices. */

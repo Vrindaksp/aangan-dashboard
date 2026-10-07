@@ -263,6 +263,36 @@ test('confirmation email for a booked consultation names the slot and promises a
   assert.match(m.text, /calendar invite is attached/);
 });
 
+test('a SAMPLE designer can never appear in a LIVE client email; assignment spreads across the roster', async () => {
+  const { getStore } = await import('../lib/store');
+  const wf = await import('../lib/workflow');
+  const store = getStore();
+  const t01 = (await store.load('designer')).enquiries.find((e) => e.source_ref === 'T01')!;
+  await store.update('enquiries', t01.id, { client_email: 'priya@example.org' });
+  const sample = (await store.listDesigners()).find((d) => d.is_sample)!;
+  const prev = process.env.CLIENT_EMAIL_MODE;
+  process.env.CLIENT_EMAIL_MODE = 'live';
+  try {
+    const live = await wf.sendEmailToClient(store, t01.id, 'confirmation', { designerId: sample.id, callbackAt: new Date(Date.now() + 3_600_000) }, 'test');
+    assert.equal(live.ok, false);
+    assert.match(live.message, /sample designer/i);
+    process.env.CLIENT_EMAIL_MODE = 'dry_run';
+    const dry = await wf.sendEmailToClient(store, t01.id, 'confirmation', { designerId: sample.id, callbackAt: new Date(Date.now() + 3_600_000) }, 'test');
+    assert.equal(dry.ok, true, 'dry-run with a sample designer is fine');
+  } finally {
+    if (prev === undefined) delete process.env.CLIENT_EMAIL_MODE; else process.env.CLIENT_EMAIL_MODE = prev;
+  }
+  const picks = new Set<string>();
+  for (let i = 0; i < 6; i++) {
+    const d = await wf.pickDesigner(store, { priority_flags: [] });
+    picks.add(d!.name);
+    await store.update('enquiries', (await store.load('designer')).enquiries.filter((e) => !e.designer_id)[i].id, { designer_id: d!.id, designer_name: d!.name, status: 'handed_off' });
+  }
+  assert.ok(picks.size >= 5, `load-balancing should spread leads across designers, got ${[...picks].join(', ')}`);
+  const big = await wf.pickDesigner(store, { priority_flags: ['large_project'] });
+  assert.notEqual(big!.role, 'designer', 'large projects go to a senior designer or the principal');
+});
+
 console.log('\nHubSpot sync (payloads only — no network)');
 test('only worthwhile leads are synced; masked phones and placeholders never reach the CRM', () => {
   const row = (ref: string) => {
