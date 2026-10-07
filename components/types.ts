@@ -20,4 +20,6 @@ export interface ViewCtx {
   sp: SP;
   /** Current URL (path + query) — put in a hidden `return_to` input of every form so actions redirect back here. */
   returnTo: string;
+  /** Anonymous visitor of the designer screens (PUBLIC_VIEW): can read everything, cannot change anything. */
+  readOnly?: boolean;
 }

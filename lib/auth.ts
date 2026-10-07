@@ -16,7 +16,15 @@ export async function getActor(): Promise<string> {
 /** Server actions that touch client data are designer-only. Throws for any other role. */
 export async function requireDesigner(): Promise<string> {
   if ((await getRole()) !== 'designer') throw new Error('Forbidden: designer access required');
-  return getActor();
+  const actor = await getActor();
+  // The anonymous public viewer sees designer screens but may never change anything (proxy.ts also blocks the POST).
+  if (actor.startsWith('viewer')) throw new Error('Forbidden: sign in to make changes');
+  return actor;
+}
+
+/** True for the anonymous read-only visitor of the designer screens (PUBLIC_VIEW). */
+export async function isReadOnlyViewer(): Promise<boolean> {
+  return (await getRole()) === 'designer' && (await getActor()).startsWith('viewer');
 }
 
 /** Bearer-token check for machine endpoints (ingest / cron). Constant-time. Fails closed when the secret is unset. */

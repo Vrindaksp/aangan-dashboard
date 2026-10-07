@@ -25,6 +25,7 @@ export const allowedViews = (role: 'designer' | 'founder'): View[] => TABS[role]
 export function Shell({ ctx, view, openEscalations, children }: { ctx: ViewCtx; view: View; openEscalations: number; children: ReactNode }) {
   const { role, sp, month, months, ds, includeSynthetic } = ctx;
   const synthetic = ds.enquiries.some((e) => e.is_synthetic);
+  const publicView = process.env.PUBLIC_VIEW === 'true';
   return (
     <div className="mx-auto max-w-[1500px] px-4 pb-16 sm:px-6">
       {/* Masthead */}
@@ -37,21 +38,34 @@ export function Shell({ ctx, view, openEscalations, children }: { ctx: ViewCtx; 
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <LiveRefresh seconds={30} />
-          <Badge tone={role === 'founder' ? 'info' : 'accent'} title={role === 'founder' ? 'Outcome-level numbers only — no transcripts or client details' : 'Full working access'}>
-            {role === 'founder' ? 'Founder · results only' : 'Designer · full access'}
+          <Badge
+            tone={role === 'founder' ? 'info' : ctx.readOnly ? 'warn' : 'accent'}
+            title={role === 'founder' ? 'Outcome-level numbers only — no transcripts or client details' : ctx.readOnly ? 'You can read everything but cannot change anything until you sign in' : 'Full working access'}
+          >
+            {role === 'founder' ? 'Founder · results only' : ctx.readOnly ? 'Designer · view only' : 'Designer · full access'}
           </Badge>
           {role === 'founder' && (
-            <Link href={process.env.OPEN_ACCESS === 'true' ? '/?as=designer' : '/?login=1'} className="btn-ghost" title="Designers and front desk: open the full working tool">
-              {process.env.OPEN_ACCESS === 'true' ? 'Designer view' : 'Designer sign-in'}
+            <Link href={publicView ? '/?as=designer' : '/?login=1'} className="btn-ghost" title="Designers and front desk: open the designer screens">
+              {publicView ? 'Designer view' : 'Designer sign-in'}
             </Link>
           )}
-          {role === 'designer' && process.env.OPEN_ACCESS === 'true' && (
-            <Link href="/?as=founder" className="btn-ghost" title="Results only — no client details">
-              Results view
-            </Link>
+          {ctx.readOnly && (
+            <>
+              <Link href="/?as=founder" className="btn-ghost" title="Results only — no client details">Results view</Link>
+              <Link href={href(sp, { login: '1' })} className="btn-solid" title="Sign in to use the buttons and make changes">Sign in to edit</Link>
+            </>
           )}
         </div>
       </header>
+
+      {ctx.readOnly && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border border-warn/50 bg-warn/10 px-4 py-2 text-xs text-warn">
+          <span className="font-mono uppercase tracking-arch">View only</span>
+          <span className="text-bone">
+            You can read every enquiry, transcript and escalation. The buttons (qualify, reject, assign, book, send, mark won) need the designer login — press “Sign in to edit”.
+          </span>
+        </div>
+      )}
 
       {ds.demo && (
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border border-warn/50 bg-warn/10 px-4 py-2 text-xs text-warn">

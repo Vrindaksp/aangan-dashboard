@@ -5,7 +5,7 @@ import { Escalations } from '@/components/views/Escalations';
 import { Overview } from '@/components/views/Overview';
 import { PricingEconomics } from '@/components/views/PricingEconomics';
 import { Queue } from '@/components/views/Queue';
-import { getRole } from '@/lib/auth';
+import { getRole, isReadOnlyViewer } from '@/lib/auth';
 import { availableMonths, computeMetrics, monthKey } from '@/lib/metrics';
 import { getStore } from '@/lib/store';
 import { href, type SP } from '@/lib/url';
@@ -26,7 +26,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
 
   const allowed = allowedViews(role);
   const view: View = allowed.includes(sp.view as View) ? (sp.view as View) : allowed[0];
-  const ctx: ViewCtx = { ds, m, month, months, now, role, includeSynthetic, sp, returnTo: href(sp, {}) };
+  const ctx: ViewCtx = { ds, m, month, months, now, role, includeSynthetic, sp, returnTo: href(sp, {}), readOnly: await isReadOnlyViewer() };
   const openEscalations = ds.escalations.filter((e) => e.status !== 'resolved').length;
 
   return (
