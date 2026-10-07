@@ -50,8 +50,7 @@ npm run ingest:demo            # 3 sample enquiries through the REAL pipeline: c
    npm run seed -- --synthetic 160       # optional: + 160 simulated (is_synthetic) → ~200 for the month
    npm run seed:reset -- --yes           # wipe the dashboard tables and re-seed (destructive)
    ```
-   The designer directory is seeded with **placeholders** (`Sample Designer A…`, `.example` emails) plus Aryan, who is named
-   in the source. Replace them with the real 14 designers (Supabase table editor → `designers`).
+   The designer directory is seeded with a **mock roster of 14** (`npm run designers:mock` reloads it): Aryan, who is named in the source, plus 13 fictional designers flagged `is_sample` with reserved `.example` emails and fake numbers. Leads are load-balanced across all of them (large or founder-connected leads go to senior designers / the principal), and the app refuses to put a sample designer in a LIVE client email. **Replace them with the real team before go-live** (Supabase → Table Editor → `designers`).
 
 ## The guardrails (all in `lib/guardrails.ts`, `lib/pricing.ts` — pure functions, unit-tested)
 
