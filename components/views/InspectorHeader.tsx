@@ -1,212 +1,263 @@
-// Inspector top: sticky identity bar + jump links, the overview panel (summary / response timeline / CRM sync)
-// and the confidence-gate panel.
+// Top of the enquiry detail: the identity header and the single "What to do next" card.
 
-import { Badge, Bar, ConfidenceMeter, Panel, Empty, channelLabel, qualLabel, qualTone, statusTone } from '@/components/ui';
-import { GUARDRAILS } from '@/lib/config';
-import { formatDateTime, formatDuration, pct, titleCase } from '@/lib/format';
-import { classifyOverride, type OverrideClass } from '@/lib/guardrails';
-import type { EnquiryRow } from '@/lib/types';
-import { isOpenEsc, KV, type InspectorData } from './inspector-kit';
+import Link from 'next/link';
+import type { ReactNode } from 'react';
+import {
+  markRespondedAction, overrideQualificationAction, releaseHandoffAction, resolveEscalationAction, acknowledgeEscalationAction,
+} from '@/app/actions';
+import { Badge, ReturnTo, channelLabel } from '@/components/ui';
+import { formatDateTime } from '@/lib/format';
+import { effectiveQualification } from '@/lib/metrics';
+import type { EscalationRow } from '@/lib/types';
+import {
+  DesignerSelect, GATE_TRIGGERS, Field, More, blockingEscalations, enquiryStatus, isActiveLead, isOpenEsc, tabHref, triggerTitle,
+  type InspectorData,
+} from './inspector-kit';
 
-const JUMPS: [string, string][] = [
-  ['gate', 'Confidence'], ['transcript', 'Transcript'], ['rubric', 'Rubric'], ['escalations', 'Escalations'], ['brief', 'Brief'],
-  ['pricing', 'Pricing'], ['consult', 'Consultation'], ['email', 'Email'], ['outcome', 'Outcome'],
-];
-
-const OVERRIDE_TEXT: Record<OverrideClass, { label: string; tone: 'ok' | 'warn' | 'crit' | 'info' }> = {
-  confirmed: { label: 'Human confirmed the AI', tone: 'ok' },
-  false_positive: { label: 'False positive (AI said yes, human said no)', tone: 'crit' },
-  false_negative: { label: 'False negative (AI said no, human said yes)', tone: 'crit' },
-  gray_to_qualified: { label: 'Review case, human qualified', tone: 'info' },
-  gray_to_unqualified: { label: 'Review case, human declined', tone: 'info' },
-};
-
-const FLAG_LABEL: Record<string, string> = {
-  founder_connection: 'Founder connection', referral: 'Referral', large_project: 'Large project', asked_pricing: 'Asked for pricing',
-  competitive: 'Comparing studios', frustrated: 'Frustrated', after_hours: 'After hours',
-};
+const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 export function InspectorBar({ d }: { d: InspectorData }) {
   const { e, escs } = d;
-  const open = escs.filter(isOpenEsc).length;
-  const eff = e.final_qualification ?? e.ai_qualification;
+  const st = enquiryStatus(e, escs.filter(isOpenEsc).length);
+  const sub = [e.location, channelLabel(e.channel), `received ${formatDateTime(e.received_at)}`].filter(Boolean).join(' · ');
   return (
-    <header className="sticky top-0 z-10 border border-line border-t-2 border-t-accent bg-panel">
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 pt-3">
-        <div className="min-w-0">
-          <h2 className="truncate font-display text-xl font-bold leading-tight sm:text-2xl">{e.client_name ?? 'Unnamed enquirer'}</h2>
-          <div className="mono mt-0.5 text-xs text-mute">
-            {e.source_ref ?? e.id.slice(0, 8)} · {channelLabel(e.channel)} · {formatDateTime(e.received_at)}
-            {e.location ? ` · ${e.location}` : ''}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Badge tone={statusTone(e.status)}>{titleCase(e.status)}</Badge>
-          <Badge tone={qualTone(eff)} title="The decision that counts (human call if made, else AI)">{qualLabel(eff)}</Badge>
-          {open > 0 && <Badge tone="crit">{open} open escalation{open === 1 ? '' : 's'}</Badge>}
-          {e.is_synthetic && <Badge tone="info" title="Simulated row, not a real enquiry">Synthetic</Badge>}
+    <header>
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <h2 className="min-w-0 font-display text-2xl font-semibold leading-tight tracking-tight sm:text-3xl">{e.client_name ?? 'Unnamed enquirer'}</h2>
+        <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+          <Badge tone={st.tone}>{st.label}</Badge>
+          {e.is_synthetic && <Badge tone="info" title="Simulated row, not a real enquiry">Practice data</Badge>}
         </div>
       </div>
-      <nav aria-label="Jump to section" className="scroll-thin mt-2 flex gap-1 overflow-x-auto border-t border-line px-3 py-1.5">
-        {JUMPS.map(([id, label]) => (
-          <a key={id} href={`#${id}`} className="whitespace-nowrap px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-mute hover:bg-raised hover:text-bone focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
-            {label}
-          </a>
-        ))}
-      </nav>
+      <p className="mt-1 text-sm text-mute">{sub}</p>
+      {e.summary && <p className="mt-2 line-clamp-2 text-[15px]">{e.summary}</p>}
     </header>
   );
 }
 
-function Step({ label, at, sub, done }: { label: string; at: string | null; sub?: string; done?: boolean }) {
+// ---- what to do next ---------------------------------------------------------------------------------
+
+export type NextStep =
+  | { kind: 'clarify'; esc: EscalationRow; question: string | null; others: number }
+  | { kind: 'escalation'; esc: EscalationRow; others: number }
+  | { kind: 'decide'; question: string | null }
+  | { kind: 'release' }
+  | { kind: 'book' }
+  | { kind: 'email' }
+  | { kind: 'reply' }
+  | { kind: 'none'; text: string };
+
+/** Picks the one thing the designer should do next from the enquiry's state. Pure: easy to reason about and test. */
+export function nextStep(d: InspectorData): NextStep {
+  const { ctx, e, tr, escs } = d;
+  const open = escs.filter(isOpenEsc);
+  const eff = effectiveQualification(e);
+  const suggested = open.find((x) => x.suggested_question)?.suggested_question ?? escs.find((x) => x.suggested_question)?.suggested_question ?? tr?.extraction?.clarifying_question ?? null;
+
+  const clarify = open.find((x) => GATE_TRIGGERS.includes(x.trigger) || x.kind === 'transcription');
+  if (clarify) return { kind: 'clarify', esc: clarify, question: clarify.suggested_question ?? suggested, others: open.length - 1 };
+
+  const other = [...open].sort((a, b) => (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9))[0];
+  if (other) return { kind: 'escalation', esc: other, others: open.length - 1 };
+
+  if (e.ai_qualification === 'review' && !e.final_qualification) return { kind: 'decide', question: suggested };
+
+  const closed = ['won', 'lost', 'closed'].includes(e.status);
+  if (!closed && eff === 'qualified' && e.handoff_status === 'not_sent') return { kind: 'release' };
+
+  const consults = ctx.ds.consultations.filter((c) => c.enquiry_id === e.id && c.status !== 'cancelled');
+  const emailed = ctx.ds.outboundEmails.some((m) => m.enquiry_id === e.id && m.status !== 'failed');
+  if (!closed && eff === 'qualified' && e.handoff_status !== 'not_sent' && consults.length === 0) return { kind: 'book' };
+  if (!closed && consults.length > 0 && !emailed) return { kind: 'email' };
+  if (isActiveLead(e) && !e.first_response_at) return { kind: 'reply' };
+
+  const label = enquiryStatus(e, 0).label.toLowerCase();
+  return { kind: 'none', text: `Nothing to do — ${label}.` };
+}
+
+function Quote({ children }: { children: string }) {
+  return <blockquote className="rounded-xl border-l-4 border-accent/40 bg-subtle px-4 py-3 text-[15px] italic">{children}</blockquote>;
+}
+
+function NoteField({ id }: { id: string }) {
   return (
-    <li className={`border-l-2 pl-3 ${at ? 'border-bone' : 'border-line'}`}>
-      <div className="label">{label}</div>
-      <div className={`mono text-sm ${at ? 'text-bone' : 'text-mute'}`}>{at ? formatDateTime(at) : done === false ? 'not yet' : 'not recorded'}</div>
-      {sub && <div className="mono text-xs text-mute">{sub}</div>}
-    </li>
+    <More title="Add a note">
+      <label htmlFor={id} className="sr-only">Note (optional)</label>
+      <input id={id} name="note" maxLength={500} placeholder="Why? (optional)" className="field" />
+    </More>
   );
 }
 
-function hubspotLine(e: EnquiryRow): { tone: 'ok' | 'crit' | 'neutral'; text: string } {
-  if (e.hubspot_error) return { tone: 'crit', text: `Sync failed: ${e.hubspot_error}` };
-  if (e.hubspot_synced_at) return { tone: 'ok', text: `Synced to HubSpot ${formatDateTime(e.hubspot_synced_at)}${e.hubspot_deal_id ? ` · deal ${e.hubspot_deal_id}` : ''}` };
-  return { tone: 'neutral', text: 'Not synced to HubSpot (CRM sync runs when HubSpot is configured).' };
+function MoreCount({ n }: { n: number }) {
+  return n > 0 ? <p className="mt-3 text-[13px] text-mute">{n} more thing{n === 1 ? '' : 's'} need attention — see Details.</p> : null;
 }
 
-export function OverviewPanel({ d }: { d: InspectorData }) {
-  const { e } = d;
-  const answered = e.first_response_at ? (new Date(e.first_response_at).getTime() - new Date(e.received_at).getTime()) / 60_000 : null;
-  const hs = hubspotLine(e);
-  const cls = classifyOverride(e);
-  const flags = e.priority_flags.filter((f) => f !== 'after_hours');
+function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <Panel title="Overview">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge tone={qualTone(e.ai_qualification)} title="What the AI concluded">AI: {qualLabel(e.ai_qualification)}</Badge>
-        {e.final_qualification ? (
-          <Badge tone={qualTone(e.final_qualification)} title={e.final_decided_by ? `Decided by ${e.final_decided_by}` : undefined}>
-            Human: {qualLabel(e.final_qualification)}
-          </Badge>
-        ) : (
-          <Badge tone="neutral">No human decision yet</Badge>
-        )}
-        {cls && <Badge tone={OVERRIDE_TEXT[cls].tone}>{OVERRIDE_TEXT[cls].label}</Badge>}
-        {e.after_hours && <Badge tone="warn">After hours</Badge>}
-        {flags.map((f) => (
-          <Badge key={f} tone="accent">{['founder_connection', 'referral', 'large_project'].includes(f) ? '★ ' : ''}{FLAG_LABEL[f] ?? titleCase(f)}</Badge>
-        ))}
-      </div>
-
-      <dl className="mt-3 grid gap-x-8 sm:grid-cols-2">
-        <KV k="Phone">{e.client_phone ?? '—'}</KV>
-        <KV k="Email">{e.client_email ?? '—'}</KV>
-        <KV k="Location">{e.location ?? '—'}</KV>
-        <KV k="Area">{e.area_sqft ? `${e.area_sqft.toLocaleString('en-IN')} sq ft` : '—'}</KV>
-        <KV k="Designer">{e.designer_name ?? 'unassigned'}</KV>
-        <KV k="Handoff">{titleCase(e.handoff_status)}{e.designer_reasked ? ' · re-asked basics' : ''}</KV>
-      </dl>
-
-      <div className="mt-3">
-        <div className="label mb-1">AI-synthesised brief</div>
-        <p className="text-sm leading-relaxed text-bone">{e.summary ?? 'No summary was generated for this enquiry.'}</p>
-      </div>
-
-      <div className="mt-4">
-        <div className="label mb-2">Response timeline</div>
-        <ol className="grid gap-3 sm:grid-cols-4">
-          <Step label="Received" at={e.received_at} />
-          <Step
-            label="First response"
-            at={e.first_response_at}
-            sub={answered !== null ? `after ${formatDuration(answered)}` : undefined}
-            done={e.channel === 'web_form' ? undefined : false}
-          />
-          <Step label="Brief released" at={e.handoff_sent_at} done={false} />
-          <Step label="Designer accepted" at={e.handoff_accepted_at} done={false} />
-        </ol>
-        {!e.first_response_at && e.channel === 'web_form' && (
-          <p className="mt-2 text-xs text-mute">Web-form response times were never logged. Use "Record first response" below going forward.</p>
-        )}
-      </div>
-
-      <p className={`mono mt-4 border-t border-line pt-2 text-xs ${hs.tone === 'crit' ? 'text-crit' : hs.tone === 'ok' ? 'text-ok' : 'text-mute'}`}>
-        CRM · {hs.text}
-      </p>
-    </Panel>
+    <section aria-label="What to do next" className="panel-hot p-5">
+      <div className="label mb-1">What to do next</div>
+      <h3 className="font-display text-xl font-semibold tracking-tight">{title}</h3>
+      <div className="mt-3 space-y-3">{children}</div>
+    </section>
   );
 }
 
-export function GatePanel({ d }: { d: InspectorData }) {
-  const { e, tr, escs } = d;
-  const thr = GUARDRAILS.confidenceMin;
-  const ext = tr?.extraction ?? null;
-  const fieldConf = Object.entries(tr?.field_confidence && Object.keys(tr.field_confidence).length ? tr.field_confidence : ext?.field_confidence ?? {}).sort((a, b) => a[1] - b[1]);
-  const flags = [...new Set([...(tr?.ambiguity_flags ?? []), ...(ext?.ambiguity_flags ?? [])])];
-  const trEsc = escs.filter((x) => x.kind === 'transcription');
-  const held = (e.composite_confidence !== null && e.composite_confidence < thr) || trEsc.length > 0;
-  const noData = e.composite_confidence === null && e.transcription_confidence === null;
+export function NextActionCard({ d }: { d: InspectorData }) {
+  const { ctx, e, escs, designers } = d;
+  const step = nextStep(d);
+  const aiCall = e.ai_qualification === 'qualified' || e.ai_qualification === 'unqualified';
+
+  if (step.kind === 'clarify') {
+    const x = step.esc;
+    return (
+      <Card title="Is this a good fit?">
+        <p className="text-[15px] text-mute">{x.reason || triggerTitle(x.trigger)}</p>
+        {step.question && (
+          <div>
+            <div className="label mb-1.5">A good question to ask</div>
+            <Quote>{step.question}</Quote>
+          </div>
+        )}
+        <form action={resolveEscalationAction}>
+          <input type="hidden" name="escalation_id" value={x.id} />
+          <ReturnTo value={ctx.returnTo} />
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" name="decision" value="qualify" className="btn-solid">This is a good fit</button>
+            <button type="submit" name="decision" value="reject" className="btn">Not a fit</button>
+          </div>
+          <NoteField id="next-note" />
+        </form>
+        <MoreCount n={step.others} />
+      </Card>
+    );
+  }
+
+  if (step.kind === 'escalation') {
+    const x = step.esc;
+    const isQual = x.kind === 'lead_qualification';
+    const slaBreach = x.trigger === 'response_sla_breach' && !e.first_response_at;
+    return (
+      <Card title={triggerTitle(x.trigger)}>
+        {x.reason && <p className="text-[15px] text-mute">{x.reason}</p>}
+        {x.suggested_question && <Quote>{x.suggested_question}</Quote>}
+        {slaBreach && (
+          <form action={markRespondedAction}>
+            <input type="hidden" name="enquiry_id" value={e.id} />
+            <ReturnTo value={ctx.returnTo} />
+            <button type="submit" className="btn-solid">Mark as replied</button>
+          </form>
+        )}
+        <form action={resolveEscalationAction}>
+          <input type="hidden" name="escalation_id" value={x.id} />
+          <ReturnTo value={ctx.returnTo} />
+          <div className="flex flex-wrap gap-2">
+            {isQual && aiCall && (
+              <button type="submit" name="decision" value="approve_ai" className="btn-solid">
+                Agree with the AI ({e.ai_qualification === 'qualified' ? 'good fit' : 'not a fit'})
+              </button>
+            )}
+            {isQual && e.ai_qualification !== 'qualified' && (
+              <button type="submit" name="decision" value="qualify" className={aiCall ? 'btn' : 'btn-solid'}>This is a good fit</button>
+            )}
+            {isQual && e.ai_qualification !== 'unqualified' && (
+              <button type="submit" name="decision" value="reject" className="btn">Not a fit</button>
+            )}
+            {!isQual && (
+              <button type="submit" name="decision" value="dismiss" className={slaBreach ? 'btn' : 'btn-solid'}>
+                {slaBreach ? 'Dismiss this alert' : 'I have dealt with this'}
+              </button>
+            )}
+            {!isQual && x.kind === 'pricing' && <button type="submit" name="decision" value="reject" className="btn-danger">Not a fit</button>}
+          </div>
+          <NoteField id="next-note" />
+        </form>
+        {x.status === 'open' && (
+          <form action={acknowledgeEscalationAction}>
+            <input type="hidden" name="escalation_id" value={x.id} />
+            <ReturnTo value={ctx.returnTo} />
+            <button type="submit" className="btn-ghost -ml-3">I am on it</button>
+          </form>
+        )}
+        <MoreCount n={step.others} />
+      </Card>
+    );
+  }
+
+  if (step.kind === 'decide') {
+    return (
+      <Card title="Is this a good fit?">
+        <p className="text-[15px] text-mute">The AI was not sure either way, so it is your call.</p>
+        {step.question && (
+          <div>
+            <div className="label mb-1.5">A good question to ask</div>
+            <Quote>{step.question}</Quote>
+          </div>
+        )}
+        <form action={overrideQualificationAction}>
+          <input type="hidden" name="enquiry_id" value={e.id} />
+          <ReturnTo value={ctx.returnTo} />
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" name="to" value="qualified" className="btn-solid">This is a good fit</button>
+            <button type="submit" name="to" value="unqualified" className="btn">Not a fit</button>
+          </div>
+          <NoteField id="next-note" />
+        </form>
+      </Card>
+    );
+  }
+
+  if (step.kind === 'release') {
+    const blockers = blockingEscalations(escs, e);
+    return (
+      <Card title="Send to a designer">
+        <p className="text-[15px] text-mute">This looks like a good fit. Pick a designer to send the brief to, or leave it blank and we will choose.</p>
+        <form action={releaseHandoffAction} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <input type="hidden" name="enquiry_id" value={e.id} />
+          <ReturnTo value={ctx.returnTo} />
+          <Field label="Designer" htmlFor="next-designer" className="sm:w-64">
+            <DesignerSelect id="next-designer" name="designer_id" designers={designers} value={e.designer_id} blankLabel="Choose for me" />
+          </Field>
+          <button type="submit" className="btn-solid" disabled={blockers.length > 0}>Send to designer</button>
+        </form>
+      </Card>
+    );
+  }
+
+  if (step.kind === 'book') {
+    return (
+      <Card title="Book a consultation">
+        <p className="text-[15px] text-mute">{e.designer_name ? `${e.designer_name} has the brief.` : 'The brief has gone to a designer.'} Next, find a time to meet the client.</p>
+        <Link href={tabHref(ctx.sp, 'followup', 'consult')} className="btn-solid">Book a consultation</Link>
+      </Card>
+    );
+  }
+
+  if (step.kind === 'email') {
+    return (
+      <Card title="Email the client">
+        <p className="text-[15px] text-mute">A consultation is booked. Let the client know with a short confirmation email.</p>
+        <Link href={tabHref(ctx.sp, 'followup', 'email', { email: 'confirmation' })} className="btn-solid">Email the client</Link>
+      </Card>
+    );
+  }
+
+  if (step.kind === 'reply') {
+    return (
+      <Card title="Reply to the client">
+        <p className="text-[15px] text-mute">No first reply is recorded yet. Once you have been in touch, mark it so the response time is right.</p>
+        <form action={markRespondedAction}>
+          <input type="hidden" name="enquiry_id" value={e.id} />
+          <ReturnTo value={ctx.returnTo} />
+          <button type="submit" className="btn-solid">Mark as replied</button>
+        </form>
+      </Card>
+    );
+  }
 
   return (
-    <Panel
-      title="Confidence and gate"
-      right={noData ? <Badge>No conversation scored</Badge> : held ? <Badge tone="crit">Held by the {pct(thr)} gate</Badge> : <Badge tone="ok">Passed the gate</Badge>}
-    >
-      {noData ? (
-        <Empty>No confidence scores: nothing was transcribed (for example a missed call or a form without parsed text).</Empty>
-      ) : (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <div className="label mb-1">Composite confidence</div>
-              <ConfidenceMeter value={e.composite_confidence} threshold={thr} />
-              <p className="mt-1 text-xs text-mute">Blend of speech-to-text confidence, [inaudible] penalties and how clearly scope and location came through.</p>
-            </div>
-            <div>
-              <div className="label mb-1">Raw transcription confidence</div>
-              <ConfidenceMeter value={e.transcription_confidence ?? tr?.transcription_confidence ?? null} threshold={thr} />
-              <p className="mt-1 text-xs text-mute">
-                {ext ? `${ext.inaudible_count} inaudible/uncertain spot${ext.inaudible_count === 1 ? '' : 's'} (each costs ${pct(GUARDRAILS.inaudiblePenalty)}, capped at ${pct(GUARDRAILS.inaudiblePenaltyCap)}).` : 'No extraction stored.'}
-              </p>
-            </div>
-          </div>
-          <p className="mt-3 text-xs text-mute">
-            Gate: anything below <span className="mono text-bone">{pct(thr)}</span> is held for a human instead of going to a designer.
-            {held ? ' This enquiry is held.' : ' This enquiry cleared it.'}
-          </p>
-        </>
-      )}
-
-      {trEsc.map((x) => (
-        <div key={x.id} className="mt-3 border border-crit/50 bg-crit/10 px-3 py-2 text-sm">
-          <span className="label mr-2 text-crit">Transcription escalation · {x.status}</span>
-          <span className="text-bone">{x.reason || titleCase(x.trigger)}</span>
-        </div>
-      ))}
-
-      {flags.length > 0 && (
-        <div className="mt-4">
-          <div className="label mb-1.5">Ambiguity flags</div>
-          <div className="flex flex-wrap gap-1.5">
-            {flags.map((f) => <Badge key={f} tone="warn">{f}</Badge>)}
-          </div>
-        </div>
-      )}
-
-      {fieldConf.length > 0 && (
-        <details className="mt-4" open={fieldConf.some(([, v]) => v < thr)}>
-          <summary className="label hover:text-bone">Per-field confidence ({fieldConf.length}) · lowest first</summary>
-          <ul className="mt-2 grid gap-x-8 gap-y-1.5 sm:grid-cols-2">
-            {fieldConf.map(([k, v]) => (
-              <li key={k} className="grid grid-cols-[8.5rem_1fr_3rem] items-center gap-2">
-                <span className="truncate font-mono text-xs text-mute" title={k}>{k}</span>
-                <Bar value={v} max={1} tone={v >= thr ? 'ok' : 'crit'} label={`${k} confidence ${pct(v)}`} />
-                <span className={`mono text-right text-xs ${v >= thr ? 'text-ok' : 'text-crit'}`}>{pct(v)}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-    </Panel>
+    <section aria-label="What to do next" className="panel p-5">
+      <div className="label mb-1">What to do next</div>
+      <p className="text-[15px] text-mute">{step.text}</p>
+    </section>
   );
 }

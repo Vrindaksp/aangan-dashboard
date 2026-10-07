@@ -1,4 +1,6 @@
-// Shared UI primitives. Server components only (no client JS). Keep these stable — every view uses them.
+// Shared UI primitives — light, calm, minimal. Server components only (no client JS).
+// Keep these stable: every view uses them. Design rules: sentence-case labels, soft tinted status pills, rounded cards,
+// big serif numbers, generous spacing, detail behind <Collapsible> instead of on the page.
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -6,35 +8,45 @@ import type { ReactNode } from 'react';
 export type Tone = 'neutral' | 'ok' | 'warn' | 'crit' | 'info' | 'accent';
 
 const TONE_TEXT: Record<Tone, string> = {
-  neutral: 'text-bone', ok: 'text-ok', warn: 'text-warn', crit: 'text-crit', info: 'text-info', accent: 'text-accent',
+  neutral: 'text-text', ok: 'text-ok', warn: 'text-warn', crit: 'text-crit', info: 'text-info', accent: 'text-accent',
 };
-const TONE_BORDER: Record<Tone, string> = {
-  neutral: 'border-line text-mute', ok: 'border-ok/60 text-ok', warn: 'border-warn/60 text-warn', crit: 'border-crit/60 text-crit',
-  info: 'border-info/60 text-info', accent: 'border-accent/70 text-accent',
+const TONE_PILL: Record<Tone, string> = {
+  neutral: 'bg-subtle text-mute', ok: 'bg-ok-soft text-ok', warn: 'bg-warn-soft text-warn', crit: 'bg-crit-soft text-crit',
+  info: 'bg-info-soft text-info', accent: 'bg-accent-soft text-accent',
 };
 export const TONE_BG: Record<Tone, string> = {
-  neutral: 'bg-bone', ok: 'bg-ok', warn: 'bg-warn', crit: 'bg-crit', info: 'bg-info', accent: 'bg-accent',
+  neutral: 'bg-line-strong', ok: 'bg-ok', warn: 'bg-warn', crit: 'bg-crit', info: 'bg-info', accent: 'bg-accent',
 };
 
-/** Status chip. Always carries text (never colour alone). */
+/** Status pill. Always carries text (never colour alone). */
 export function Badge({ tone = 'neutral', children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
   return (
-    <span title={title} className={`inline-flex items-center whitespace-nowrap border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${TONE_BORDER[tone]}`}>
+    <span title={title} className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${TONE_PILL[tone]}`}>
       {children}
     </span>
   );
 }
 
-/** Numbered section heading, drawing-sheet style:  01 — VOLUME */
-export function SectionHead({ index, title, note, right }: { index?: string; title: string; note?: ReactNode; right?: ReactNode }) {
+/** Page title block: a serif headline with an optional one-line explanation and right-aligned actions. */
+export function PageHeader({ title, subtitle, right }: { title: ReactNode; subtitle?: ReactNode; right?: ReactNode }) {
   return (
-    <div className="mb-3 flex items-end justify-between gap-4 border-b border-rule pb-2">
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h2 className="flex items-baseline gap-3 font-display text-lg font-bold uppercase tracking-wide">
-          {index && <span className="font-mono text-xs text-accent">{index}</span>}
-          {title}
-        </h2>
-        {note && <p className="mt-1 max-w-3xl text-xs text-mute">{note}</p>}
+        <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{title}</h1>
+        {subtitle && <p className="mt-1.5 max-w-2xl text-[15px] text-mute">{subtitle}</p>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+/** Section heading. (`index` is accepted for backwards compatibility and ignored — no numbering.) */
+export function SectionHead({ title, note, right }: { index?: string; title: string; note?: ReactNode; right?: ReactNode }) {
+  return (
+    <div className="mb-3 mt-8 flex items-end justify-between gap-4 first:mt-0">
+      <div>
+        <h2 className="font-display text-xl font-semibold tracking-tight">{title}</h2>
+        {note && <p className="mt-0.5 max-w-2xl text-sm text-mute">{note}</p>}
       </div>
       {right}
     </div>
@@ -45,61 +57,79 @@ export function Panel({ title, right, hot, children, className = '', pad = true 
   return (
     <section className={`${hot ? 'panel-hot' : 'panel'} ${className}`}>
       {(title || right) && (
-        <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
-          <h3 className="label">{title}</h3>
+        <header className="flex items-center justify-between gap-3 px-5 pt-4">
+          <h3 className="text-sm font-semibold">{title}</h3>
           {right}
         </header>
       )}
-      <div className={pad ? 'p-4' : ''}>{children}</div>
+      <div className={pad ? 'p-5' : ''}>{children}</div>
     </section>
   );
 }
 
-/** Big-number KPI cell. `hot` = accent top rule (use for the 1–2 numbers that matter most). */
+/**
+ * Detail on demand: a card whose body is hidden until opened. Use for anything secondary so the page stays calm.
+ * Pure HTML <details> — no JavaScript.
+ */
+export function Collapsible({ title, hint, children, defaultOpen = false }: { title: ReactNode; hint?: ReactNode; children: ReactNode; defaultOpen?: boolean }) {
+  return (
+    <details open={defaultOpen} className="group panel">
+      <summary className="flex items-center justify-between gap-4 rounded-2xl px-5 py-4 hover:bg-subtle/60">
+        <span>
+          <span className="text-sm font-semibold">{title}</span>
+          {hint && <span className="ml-2 text-sm text-mute">{hint}</span>}
+        </span>
+        <span aria-hidden className="text-mute transition-transform group-open:rotate-180">⌄</span>
+      </summary>
+      <div className="border-t border-line p-5">{children}</div>
+    </details>
+  );
+}
+
+/** Big-number KPI card. `hot` = accent outline (use for the one or two numbers that matter most). */
 export function Kpi({ label, value, sub, tone = 'neutral', hot, href, unit }: { label: string; value: ReactNode; sub?: ReactNode; tone?: Tone; hot?: boolean; href?: string; unit?: string }) {
   const body = (
-    <div className={`${hot ? 'panel-hot' : 'panel'} h-full p-4 transition-colors ${href ? 'hover:bg-raised' : ''}`}>
+    <div className={`${hot ? 'panel-hot' : 'panel'} h-full p-5 transition-shadow ${href ? 'hover:shadow-lift' : ''}`}>
       <div className="label">{label}</div>
-      <div className={`num mt-2 text-4xl leading-none md:text-5xl ${TONE_TEXT[tone]}`}>
+      <div className={`num mt-2 text-4xl leading-none sm:text-[2.6rem] ${TONE_TEXT[tone]}`}>
         {value}
-        {unit && <span className="ml-1 text-lg font-medium text-mute">{unit}</span>}
+        {unit && <span className="ml-1 font-sans text-lg font-normal text-mute">{unit}</span>}
       </div>
-      {sub && <div className="mt-2 text-xs text-mute">{sub}</div>}
+      {sub && <div className="mt-2.5 text-sm text-mute">{sub}</div>}
     </div>
   );
-  return href ? <Link href={href} className="block focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">{body}</Link> : body;
+  return href ? <Link href={href} className="block rounded-2xl">{body}</Link> : body;
 }
 
 /** Thin horizontal bar. value/max in the same units. */
-export function Bar({ value, max, tone = 'accent', height = 6, label }: { value: number; max: number; tone?: Tone; height?: number; label?: string }) {
+export function Bar({ value, max, tone = 'accent', height = 8, label }: { value: number; max: number; tone?: Tone; height?: number; label?: string }) {
   const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
   return (
-    <div className="w-full bg-line/60" style={{ height }} role="img" aria-label={label ?? `${Math.round(pct)}%`}>
-      <div className={`h-full ${TONE_BG[tone]}`} style={{ width: `${pct}%` }} />
+    <div className="w-full overflow-hidden rounded-full bg-subtle" style={{ height }} role="img" aria-label={label ?? `${Math.round(pct)}%`}>
+      <div className={`h-full rounded-full ${TONE_BG[tone]}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }
 
 /**
- * Confidence meter with the escalation threshold marked. Below the line = held for a human.
- * `value` and `threshold` are 0–1.
+ * How sure the AI is that it understood the conversation. Plain words first; the bar is secondary.
+ * `value` and `threshold` are 0–1. Below the threshold the enquiry is held for a person to check.
  */
 export function ConfidenceMeter({ value, threshold = 0.85, label = true }: { value: number | null; threshold?: number; label?: boolean }) {
-  if (value === null) return <span className="mono text-xs text-dim">n/a</span>;
+  if (value === null) return <span className="text-xs text-faint">n/a</span>;
   const ok = value >= threshold;
   return (
-    <div className="flex items-center gap-2" title={`Threshold ${(threshold * 100).toFixed(0)}%`}>
-      <div className="relative h-2 w-28 bg-line/60" role="img" aria-label={`Confidence ${(value * 100).toFixed(0)}% (threshold ${(threshold * 100).toFixed(0)}%)`}>
-        <div className={`h-full ${ok ? 'bg-ok' : 'bg-crit'}`} style={{ width: `${value * 100}%` }} />
-        <div className="absolute -top-1 h-4 w-px bg-bone" style={{ left: `${threshold * 100}%` }} />
+    <div className="flex items-center gap-2" title={`Needs ${(threshold * 100).toFixed(0)}% or more to go straight to a designer`}>
+      <div className="relative h-1.5 w-20 overflow-hidden rounded-full bg-subtle" role="img" aria-label={`Confidence ${(value * 100).toFixed(0)}% (needs ${(threshold * 100).toFixed(0)}%)`}>
+        <div className={`h-full rounded-full ${ok ? 'bg-ok' : 'bg-crit'}`} style={{ width: `${value * 100}%` }} />
       </div>
-      {label && <span className={`mono text-xs ${ok ? 'text-ok' : 'text-crit'}`}>{(value * 100).toFixed(0)}%{ok ? '' : ' · held'}</span>}
+      {label && <span className={`text-xs tabular-nums ${ok ? 'text-mute' : 'font-medium text-crit'}`}>{(value * 100).toFixed(0)}%{ok ? '' : ' · needs a check'}</span>}
     </div>
   );
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <div className="border border-dashed border-line px-4 py-6 text-center text-sm text-mute">{children}</div>;
+  return <div className="rounded-xl border border-dashed border-line-strong bg-surface/60 px-4 py-8 text-center text-sm text-mute">{children}</div>;
 }
 
 /** Status message shown after an action (?msg=…&ok=1|0). */
@@ -107,9 +137,9 @@ export function Flash({ msg, ok }: { msg?: string; ok?: string }) {
   if (!msg) return null;
   const good = ok !== '0';
   return (
-    <div role="status" className={`mb-4 flex items-start gap-3 border px-4 py-2.5 text-sm ${good ? 'border-ok/60 bg-ok/10 text-ok' : 'border-crit/60 bg-crit/10 text-crit'}`}>
-      <span className="font-mono text-[11px] uppercase tracking-arch">{good ? 'Done' : 'Not done'}</span>
-      <span className="text-bone">{msg}</span>
+    <div role="status" className={`mb-5 flex items-start gap-3 rounded-xl px-4 py-3 text-sm ${good ? 'bg-ok-soft text-ok' : 'bg-crit-soft text-crit'}`}>
+      <span aria-hidden className="mt-0.5 font-semibold">{good ? '✓' : '!'}</span>
+      <span className="text-text">{msg}</span>
     </div>
   );
 }
@@ -124,7 +154,7 @@ export function ReturnTo({ value }: { value: string }) {
 export const qualTone = (q: string | null | undefined): Tone =>
   q === 'qualified' ? 'ok' : q === 'unqualified' ? 'neutral' : q === 'review' ? 'warn' : 'neutral';
 export const qualLabel = (q: string | null | undefined) =>
-  q === 'qualified' ? 'Qualified' : q === 'unqualified' ? 'Declined' : q === 'review' ? 'Needs review' : q === 'not_applicable' ? 'Not a lead' : '—';
+  q === 'qualified' ? 'Good fit' : q === 'unqualified' ? 'Not a fit' : q === 'review' ? 'Needs a look' : q === 'not_applicable' ? 'Not a lead' : '—';
 export const severityTone = (s: string): Tone => (s === 'critical' ? 'crit' : s === 'high' ? 'crit' : s === 'medium' ? 'warn' : 'neutral');
 export const statusTone = (s: string): Tone =>
   s === 'won' ? 'ok' : s === 'handed_off' ? 'info' : s === 'escalated' ? 'warn' : s === 'lost' ? 'crit' : 'neutral';

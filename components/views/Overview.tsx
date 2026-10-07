@@ -1,423 +1,308 @@
 // "Results" — the founder's main screen (outcome numbers only) and a designer tab.
-// Aggregates only: nothing in here loops over enquiries or prints per-person data.
+// A calm one-screen summary; the detail lives in closed sections. Aggregates only:
+// nothing in here loops over enquiries or prints per-person data.
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { Badge, ConfidenceMeter, Empty, Kpi, Panel, SectionHead, type Tone } from '../ui';
-import { DistributionList, Funnel, SegmentedBar, Stat, StatGrid, StackedDailyBars } from '../charts';
+import { Badge, Bar, Collapsible, Empty, Kpi, PageHeader, Panel } from '../ui';
+import { Funnel, SegmentedBar, StackedDailyBars } from '../charts';
 import type { ViewCtx } from '../types';
-import { GUARDRAILS } from '@/lib/config';
-import { formatDuration, formatLakhCr, pct } from '@/lib/format';
+import { formatDuration, formatInr, formatLakhCr, pct } from '@/lib/format';
 import { href } from '@/lib/url';
 
-const orDash = (v: number | null, f: (n: number) => string) => (v === null ? '—' : f(v));
-const share = (v: number | null) => orDash(v, (n) => pct(n));
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const orDash = (v: number | null, f: (n: number) => string) => (v === null ? '—' : f(v));
 
 const KIND_LABEL: Record<string, string> = {
-  transcription: 'Transcription (low confidence)',
-  lead_qualification: 'Lead qualification',
-  pricing: 'Pricing',
+  transcription: 'Unclear recording',
+  lead_qualification: 'Lead decision',
+  pricing: 'Price question',
   service_recovery: 'Service recovery',
 };
-const OWNER_LABEL: Record<string, string> = { front_desk: 'Front desk', founder: 'Founder', senior_designer: 'Senior designer' };
 
 export function Overview({ ctx }: { ctx: ViewCtx }) {
   const { m, role } = ctx;
   const { volume: v, response: r, qualification: q, handoff: h, escalations: e, calendar: c, money, funnel } = m;
+  const isDesigner = role === 'designer';
   const realLeads = funnel[1]?.n ?? 0;
   const openEsc = e.open + e.acknowledged;
 
-  return (
-    <div className="space-y-12">
-      {/* ---------------------------------------------------------------- header */}
+  // ---- one plain-English sentence for the header
+  const clauses: string[] = [];
+  if (r.withinHourShare !== null) clauses.push(`${pct(r.withinHourShare)} of those with a recorded reply were answered within an hour`);
+  if (realLeads > 0) clauses.push(`${q.counts.qualified} look like a good fit`);
+  if (q.awaitingReview > 0) clauses.push(`${q.awaitingReview} ${q.awaitingReview === 1 ? 'is' : 'are'} waiting for a person to look`);
+  const summary =
+    v.total === 0
+      ? 'No enquiries have been recorded for this month yet.'
+      : `${plural(v.total, 'enquiry', 'enquiries')} came in${clauses.length ? '. ' : '.'}${
+          clauses.length ? `${clauses.length > 1 ? clauses.slice(0, -1).join(', ') + ', and ' + clauses[clauses.length - 1] : clauses[0]}.` : ''
+        }`;
+
+  const subtitle = (
+    <>
+      {summary}
+      {m.syntheticCount > 0 && <span className="mt-1 block text-sm text-faint">includes {m.syntheticCount} sample {m.syntheticCount === 1 ? 'enquiry' : 'enquiries'}</span>}
+    </>
+  );
+
+  if (!m.hasData) {
+    return (
       <div>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className="label">Results · outcome numbers only</div>
-            <h2 className="font-display text-2xl font-bold uppercase tracking-tight sm:text-3xl">{m.monthLabel}</h2>
-          </div>
-          {m.syntheticCount > 0 && (
-            <Badge tone="warn" title="Simulated rows are mixed into these numbers. Use the toggle in the header to hide them.">
-              Includes {m.syntheticCount} synthetic {m.syntheticCount === 1 ? 'row' : 'rows'}
-            </Badge>
+        <PageHeader title={m.monthLabel} subtitle={subtitle} />
+        <Empty>Nothing to show for {m.monthLabel} yet. This page fills in as enquiries arrive.</Empty>
+      </div>
+    );
+  }
+
+  const fastReplyInsight = (): string => {
+    const lt1 = r.buckets[0];
+    const gt48 = r.buckets[4];
+    if (r.conversionLift !== null) return `Enquiries answered within an hour turn into projects ${r.conversionLift.toFixed(1)} times as often as those answered after 48 hours.`;
+    if (r.recorded === 0) return 'No replies have been recorded yet this month.';
+    return `${lt1.n} ${lt1.n === 1 ? 'enquiry was' : 'enquiries were'} answered within an hour, and ${gt48.n} waited more than 48 hours.`;
+  };
+  const anyConversion = r.buckets.some((b) => b.conversion !== null);
+  const bucketMax = Math.max(1, ...r.buckets.map((b) => b.n));
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title={m.monthLabel} subtitle={subtitle} />
+
+      {/* ---------------------------------------------------------------- four headline numbers */}
+      <section aria-label="Headline numbers" className={`grid grid-cols-2 gap-4 ${money.wonCount > 0 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
+        <Kpi
+          label="Enquiries"
+          value={v.total}
+          sub={`${v.byChannel.phone.n} phone, ${v.byChannel.whatsapp.n} WhatsApp, ${v.byChannel.web_form.n} web`}
+        />
+        <Kpi
+          hot
+          label="Answered within an hour"
+          value={r.withinHourShare === null ? '—' : pct(r.withinHourShare)}
+          sub={r.recorded > 0 ? 'Fast replies are the ones that turn into projects.' : 'No replies recorded yet.'}
+        />
+        <Kpi
+          label="Good fit"
+          value={q.counts.qualified}
+          sub={q.qualifiedRate !== null ? `${pct(q.qualifiedRate)} of ${plural(realLeads, 'real lead')}` : 'No real leads yet.'}
+        />
+        <Kpi
+          hot
+          label="Pipeline value"
+          value={money.pipelineCount > 0 ? formatLakhCr(money.pipelineInr) : '—'}
+          sub={money.pipelineCount > 0 ? 'Internal estimate' : 'No estimates yet'}
+        />
+        {money.wonCount > 0 && <Kpi label="Won so far" value={formatLakhCr(money.wonInr)} tone="ok" sub={`${plural(money.wonCount, 'project')} signed`} />}
+      </section>
+
+      {/* ---------------------------------------------------------------- needs attention */}
+      <section aria-label="Needs attention" className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-accent/20 bg-accent-soft p-5">
+        <div>
+          {openEsc > 0 ? (
+            <>
+              <h2 className="font-display text-xl font-semibold">{openEsc} {openEsc === 1 ? 'thing is' : 'things are'} waiting for a person</h2>
+              <p className="mt-1 text-[15px] text-mute">
+                {e.open} new, {e.acknowledged} already being looked at
+                {r.awaiting > 0 && <>. {plural(r.awaiting, 'live enquiry', 'live enquiries')} still without a reply.</>}
+              </p>
+            </>
+          ) : r.awaiting > 0 ? (
+            <>
+              <h2 className="font-display text-xl font-semibold">Nothing is flagged for a person</h2>
+              <p className="mt-1 text-[15px] text-mute">{plural(r.awaiting, 'live enquiry', 'live enquiries')} still without a reply.</p>
+            </>
+          ) : (
+            <h2 className="font-display text-xl font-semibold">Nothing is waiting — nice.</h2>
           )}
         </div>
-        {m.syntheticCount > 0 && (
-          <p className="mt-3 border border-warn/50 bg-warn/10 px-4 py-2 text-xs text-bone">
-            <span className="mr-2 font-mono uppercase tracking-arch text-warn">Synthetic data</span>
-            This month includes {m.syntheticCount} synthetic {m.syntheticCount === 1 ? 'row' : 'rows'} (simulated, not real enquiries). Figures are not purely real-world.
+        {isDesigner && openEsc > 0 && (
+          <Link href={href(ctx.sp, { view: 'escalations', enquiry: null })} className="btn-solid">Open the list</Link>
+        )}
+      </section>
+
+      {/* ---------------------------------------------------------------- three compact cards */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Panel title="Enquiries this month">
+          {v.total === 0 ? (
+            <p className="text-sm text-mute">No enquiries this month.</p>
+          ) : (
+            <>
+              <StackedDailyBars days={v.daily} stacked={false} />
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Badge tone="accent">Phone {v.byChannel.phone.n}</Badge>
+                <Badge tone="info">WhatsApp {v.byChannel.whatsapp.n}</Badge>
+                <Badge>Web form {v.byChannel.web_form.n}</Badge>
+              </div>
+              <p className="mt-3 text-sm text-mute">
+                {v.afterHoursShare !== null ? `${pct(v.afterHoursShare)} arrived outside 10am–7pm` : 'No after-hours data yet'}
+                {v.missedCalls > 0 ? `, and ${plural(v.missedCalls, 'call')} ${v.missedCalls === 1 ? 'was' : 'were'} missed.` : ', and no calls were missed.'}
+              </p>
+            </>
+          )}
+        </Panel>
+
+        <Panel title="How fast we reply">
+          {r.recorded === 0 ? (
+            <p className="text-sm text-mute">No replies recorded yet this month.</p>
+          ) : (
+            <ul className="space-y-3.5">
+              {r.buckets.map((b) => (
+                <li key={b.key}>
+                  <div className="flex items-baseline justify-between gap-3 text-sm">
+                    <span>{b.label}</span>
+                    <span className="tabular-nums">
+                      {b.n}
+                      {anyConversion && (
+                        <span className="ml-2 text-mute">{b.conversion === null ? '' : (b.conversion === 0 ? 'none won yet' : `${pct(b.conversion)} became projects`)}</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="mt-1.5"><Bar value={b.n} max={bucketMax} tone={b.key === 'lt1h' ? 'ok' : 'accent'} height={6} label={`${b.label}: ${b.n} enquiries`} /></div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {r.recorded > 0 && !anyConversion && <p className="mt-3 text-sm text-mute">No results logged yet.</p>}
+          <p className="mt-4 text-sm">{fastReplyInsight()}</p>
+          {r.notRecorded > 0 && (
+            <p className="mt-2 text-sm text-faint">
+              {plural(r.notRecorded, 'enquiry', 'enquiries')} {r.notRecorded === 1 ? 'has' : 'have'} no recorded reply. Web-form reply times aren&apos;t recorded.
+            </p>
+          )}
+        </Panel>
+
+        <Panel title="How enquiries were sorted">
+          <SegmentedBar
+            segments={[
+              { label: 'Good fit', n: q.counts.qualified, tone: 'ok' },
+              { label: 'Needs a look', n: q.counts.review, tone: 'warn' },
+              { label: 'Not a fit', n: q.counts.unqualified, tone: 'neutral' },
+              { label: 'Not a lead', n: q.counts.not_applicable, tone: 'info' },
+            ]}
+          />
+          <p className="mt-4 text-sm text-mute">
+            {q.awaitingReview > 0
+              ? `${plural(q.awaitingReview, 'enquiry', 'enquiries')} ${q.awaitingReview === 1 ? 'is' : 'are'} in the "needs a look" queue. A person decides these, so the AI never quietly turns away a good lead.`
+              : 'Anything unclear goes to a person to decide, so the AI never quietly turns away a good lead.'}
           </p>
-        )}
-        {!m.hasData && (
-          <div className="mt-3"><Empty>No enquiries recorded for {m.monthLabel} yet. Every number below will fill in as enquiries arrive.</Empty></div>
-        )}
+        </Panel>
       </div>
 
-      {/* ---------------------------------------------------------------- hero KPIs */}
-      <section aria-label="Headline numbers">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          <Kpi
-            label="Enquiries this month"
-            value={v.total}
-            sub={`${v.byChannel.phone.n} phone · ${v.byChannel.whatsapp.n} WhatsApp · ${v.byChannel.web_form.n} web form`}
-          />
-          <Kpi
-            hot
-            label="Responded within 1 hour"
-            value={r.withinHourShare === null ? '—' : pct(r.withinHourShare)}
-            tone={r.withinHourShare === null ? 'neutral' : r.withinHourShare >= 0.5 ? 'ok' : 'warn'}
-            sub={r.recorded > 0 ? `Of ${r.recorded} with a recorded response. Under 1 h converts best; over 48 h drops off.` : 'No first responses recorded yet.'}
-          />
-          <Kpi
-            label="Qualified rate of real leads"
-            value={q.qualifiedRate === null ? '—' : pct(q.qualifiedRate)}
-            sub={realLeads > 0 ? `${q.counts.qualified} qualified of ${realLeads} real leads` : 'No real leads yet.'}
-          />
-          <Kpi
-            hot
-            label="Qualified pipeline value"
-            value={money.pipelineCount > 0 ? formatLakhCr(money.pipelineInr) : '—'}
-            sub={money.pipelineCount > 0 ? `${plural(money.pipelineCount, 'live lead')} · internal estimate` : 'No qualified live leads with an estimate yet.'}
-          />
-          <Kpi
-            label="Won revenue"
-            value={money.wonCount > 0 ? formatLakhCr(money.wonInr) : '—'}
-            sub={
-              money.wonCount + money.lostCount > 0
-                ? `Win rate ${share(money.winRate)} · ${money.wonCount} won, ${money.lostCount} lost`
-                : 'No outcomes logged yet'
-            }
-          />
-          <Kpi
-            label="Open escalations"
-            value={openEsc}
-            tone={openEsc > 0 ? 'warn' : 'ok'}
-            href={role === 'designer' ? href(ctx.sp, { view: 'escalations', enquiry: null }) : undefined}
-            sub={`${e.open} open · ${e.acknowledged} acknowledged${role === 'designer' ? ' · open the queue →' : ''}`}
-          />
-        </div>
-      </section>
-
-      {/* ---------------------------------------------------------------- 01 volume */}
-      <section>
-        <SectionHead index="01" title="Enquiry volume" note="Phone carries the most volume and the most urgency. The front desk is staffed 10am–7pm, so after-hours enquiries wait for the next morning." />
-        {v.total === 0 ? (
-          <Empty>No enquiries this month.</Empty>
-        ) : (
-          <div className="grid gap-3 lg:grid-cols-3">
-            <Panel title="Daily enquiries by channel" className="lg:col-span-2" right={<span className="mono text-xs text-mute">{v.total} total</span>}>
-              <StackedDailyBars days={v.daily} />
-            </Panel>
-            <div className="space-y-3">
-              <Panel title="Channel split">
-                <DistributionList
-                  items={[
-                    { label: 'Phone', n: v.byChannel.phone.n, tone: 'accent' },
-                    { label: 'WhatsApp', n: v.byChannel.whatsapp.n, tone: 'info' },
-                    { label: 'Web form', n: v.byChannel.web_form.n, tone: 'neutral' },
-                  ]}
-                  total={v.total}
-                  scale="total"
-                />
-                <div className="mt-4 space-y-2 border-t border-line pt-3">
-                  <ChannelNote name="WhatsApp" endpoint="POST /api/ingest/whatsapp" n={v.byChannel.whatsapp.n} />
-                  <ChannelNote name="Web form" endpoint="POST /api/ingest/web-form" n={v.byChannel.web_form.n} />
-                </div>
-              </Panel>
+      {/* ---------------------------------------------------------------- money teaser */}
+      <Panel>
+        <div className="flex flex-wrap items-center justify-between gap-5">
+          <div className="flex flex-wrap gap-x-10 gap-y-3">
+            <div>
+              <div className="label">Pipeline value</div>
+              <div className="num mt-1 text-3xl leading-none">{money.pipelineCount > 0 ? formatLakhCr(money.pipelineInr) : '—'}</div>
             </div>
-            <div className="lg:col-span-3">
-              <StatGrid>
-                <Stat
-                  label="After-hours share"
-                  value={share(v.afterHoursShare)}
-                  tone={v.afterHoursShare !== null && v.afterHoursShare >= 0.3 ? 'warn' : 'neutral'}
-                  sub={`${plural(v.afterHours, 'enquiry', 'enquiries')} outside 10am–7pm`}
-                />
-                <Stat label="Missed calls" value={v.missedCalls} tone={v.missedCalls > 0 ? 'warn' : 'ok'} sub="Phone enquiries nobody picked up" />
-                <Stat label="Dropped calls" value={v.droppedCalls} tone={v.droppedCalls > 0 ? 'warn' : 'ok'} sub="Caller hung up mid-conversation" />
-                <Stat label="Phone share" value={pct(v.byChannel.phone.share)} sub="Of all enquiries this month" />
-              </StatGrid>
+            <div>
+              <div className="label">Cost to run this system</div>
+              <div className="num mt-1 text-3xl leading-none">{money.totalCostInr > 0 ? formatInr(money.totalCostInr) : '—'}</div>
             </div>
           </div>
-        )}
-      </section>
+          <Link href={href(ctx.sp, { view: 'pricing', enquiry: null })} className="btn">Money &amp; costs →</Link>
+        </div>
+      </Panel>
 
-      {/* ---------------------------------------------------------------- 02 response time */}
-      <section>
-        <SectionHead
-          index="02"
-          title="Response time"
-          note="The studio's own finding: replying within an hour converts best, and after 48 hours enquiries fall away. Conversion is won ÷ (won + lost) per bucket."
-        />
-        <div className="grid gap-3 lg:grid-cols-5">
-          <Panel title="Time to first response" className="lg:col-span-3" right={<span className="mono text-xs text-mute">{r.recorded} recorded</span>}>
-            {r.recorded === 0 ? (
-              <p className="text-sm text-mute">No first responses recorded yet this month.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[460px] border-collapse">
-                  <thead>
-                    <tr>
-                      <th scope="col" className="th pl-0">Bucket</th>
-                      <th scope="col" className="th w-[40%]">Enquiries</th>
-                      <th scope="col" className="th text-right">Won ÷ decided</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {r.buckets.map((b) => {
-                      const max = Math.max(1, ...r.buckets.map((x) => x.n));
-                      const tone: Tone = b.key === 'lt1h' ? 'ok' : b.key === 'gt48h' ? 'crit' : 'accent';
-                      return (
-                        <tr key={b.key}>
-                          <th scope="row" className="td pl-0 text-left font-normal text-bone">{b.label}</th>
-                          <td className="td">
-                            <div className="flex items-center gap-3">
-                              <div className="h-2 flex-1 bg-line/60" role="img" aria-label={`${b.label}: ${b.n} enquiries`}>
-                                <div className={`h-full ${tone === 'ok' ? 'bg-ok' : tone === 'crit' ? 'bg-crit' : 'bg-accent'}`} style={{ width: `${(b.n / max) * 100}%` }} />
-                              </div>
-                              <span className="mono w-8 text-right text-sm">{b.n}</span>
-                            </div>
-                          </td>
-                          <td className="td text-right">
-                            {b.conversion === null ? (
-                              <span className="text-xs text-mute">No outcomes logged yet</span>
-                            ) : (
-                              <span className="mono text-sm">{pct(b.conversion)} <span className="text-xs text-mute">({b.won}/{b.resolved})</span></span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <p className="mt-3 text-xs text-mute">
-              {r.notRecorded > 0
-                ? `${plural(r.notRecorded, 'enquiry', 'enquiries')} have no recorded first response — web-form response times are not captured in the source data, and some enquiries are still waiting.`
-                : 'Every enquiry this month has a recorded first response.'}
+      {/* ---------------------------------------------------------------- details, closed by default */}
+      <div className="space-y-3">
+        <Collapsible title="Handing leads to designers">
+          {h.sent === 0 ? (
+            <p className="text-sm text-mute">
+              No leads have been sent to designers yet this month.
+              {h.pendingRelease > 0 && ` ${plural(h.pendingRelease, 'good lead')} ${h.pendingRelease === 1 ? 'is' : 'are'} ready to send.`}
             </p>
-          </Panel>
-
-          <div className="lg:col-span-2">
-            <StatGrid className="grid-cols-2">
-              <Stat label="Within 1 hour" value={share(r.withinHourShare)} tone={r.withinHourShare !== null && r.withinHourShare >= 0.5 ? 'ok' : 'neutral'} />
-              <Stat label="Over 48 hours" value={share(r.over48hShare)} tone={r.over48hShare !== null && r.over48hShare > 0 ? 'crit' : 'neutral'} />
-              <Stat label="Median response" value={formatDuration(r.medianMinutes)} sub="All recorded enquiries" />
-              <Stat label="Still awaiting" value={r.awaiting} tone={r.awaiting > 0 ? 'warn' : 'ok'} sub="Active leads with no reply yet" />
-              <Stat label="In hours" value={formatDuration(r.medianInHours)} sub="Median, 10am–7pm" />
-              <Stat label="After hours" value={formatDuration(r.medianAfterHours)} sub="Median, outside hours" />
-            </StatGrid>
-            <div className="mt-3 border border-line bg-panel p-4">
-              <div className="label">Median by channel</div>
-              <dl className="mt-2 grid grid-cols-3 gap-3">
-                <MedianCell name="Phone" minutes={r.medianByChannel.phone} />
-                <MedianCell name="WhatsApp" minutes={r.medianByChannel.whatsapp} />
-                <MedianCell name="Web form" minutes={r.medianByChannel.web_form} missing="Not recorded" />
-              </dl>
-            </div>
-            <div className="mt-3 border border-line bg-panel p-4">
-              <div className="label">Speed vs conversion</div>
-              {r.conversionLift !== null ? (
-                <p className="mt-1.5 text-sm text-bone">
-                  Enquiries answered within an hour convert <span className="num text-xl text-ok">{r.conversionLift.toFixed(1)}×</span> better than those answered after 48 hours.
-                </p>
-              ) : (
-                <p className="mt-1.5 text-sm text-mute">Shown once outcomes are logged for both the under-1-hour and over-48-hour groups.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------------------------------------------------------- 03 qualification */}
-      <section>
-        <SectionHead
-          index="03"
-          title="Lead qualification"
-          note="AI screens every enquiry against the five-criteria rubric. A person reviews the gray area, then audits a sample of declines so we can measure how often the AI is wrong."
-        />
-        <div className="grid gap-3">
-          <Panel title="AI outcome" right={<span className="mono text-xs text-mute">{v.total} enquiries</span>}>
-            <SegmentedBar
-              segments={[
-                { label: 'Qualified', n: q.counts.qualified, tone: 'ok' },
-                { label: 'Needs review', n: q.counts.review, tone: 'warn' },
-                { label: 'Declined', n: q.counts.unqualified, tone: 'neutral' },
-                { label: 'Not a lead', n: q.counts.not_applicable, tone: 'info' },
+          ) : (
+            <Rows
+              rows={[
+                ['Sent to designers', h.sent],
+                ['Accepted', h.accepted],
+                ['Designer had to go back to the client', h.reasked > 0 ? `${h.reasked} (${orDash(h.reaskRate, (n) => pct(n))})` : 'Never'],
+                ['Median time to accept', formatDuration(h.medianAcceptMinutes)],
+                ['Ready to send', h.pendingRelease],
               ]}
             />
-          </Panel>
+          )}
+        </Collapsible>
 
-          <div className="grid gap-3 lg:grid-cols-3">
-            <Panel title="Where the AI was overruled" className="lg:col-span-2">
-              <div className="grid gap-px border border-line bg-line sm:grid-cols-2">
-                <div className="bg-panel p-4">
-                  <div className="label">False-negative rate</div>
-                  <div className={`num mt-1.5 text-4xl leading-none ${q.fnRate !== null && q.fnRate > 0 ? 'text-warn' : 'text-bone'}`}>{share(q.fnRate)}</div>
-                  <p className="mt-2 text-xs leading-snug text-mute">
-                    Declined by the AI, later rescued by a person.{' '}
-                    {q.fnAudited > 0
-                      ? `${q.falseNegatives} of ${q.fnAudited} audited ${q.fnAudited === 1 ? 'decline' : 'declines'}.`
-                      : 'No declines audited yet.'}
-                  </p>
-                  <p className="mt-1 text-xs leading-snug text-mute">
-                    {q.estMissedGoodLeads !== null
-                      ? `Estimated good leads missed: about ${q.estMissedGoodLeads} (an estimate from the audited share, not a count).`
-                      : 'Missed-lead estimate appears once declines have been audited.'}
-                  </p>
-                </div>
-                <div className="bg-panel p-4">
-                  <div className="label">False-positive rate</div>
-                  <div className={`num mt-1.5 text-4xl leading-none ${q.fpRate !== null && q.fpRate > 0 ? 'text-warn' : 'text-bone'}`}>{share(q.fpRate)}</div>
-                  <p className="mt-2 text-xs leading-snug text-mute">
-                    Qualified by the AI, later flagged bad.{' '}
-                    {q.counts.qualified > 0 ? `${q.falsePositives} of ${q.counts.qualified} qualified.` : 'Nothing qualified yet.'}
-                  </p>
-                </div>
-              </div>
-              <p className="mt-3 border-l-2 border-accent pl-3 text-xs leading-snug text-bone">
-                Why false negatives matter more: a good lead we turn away is lost revenue, while a false positive only costs a designer a little time.
+        <Collapsible title="Needs attention — by type">
+          <Rows
+            rows={[
+              ...Object.entries(KIND_LABEL)
+                .filter(([k]) => (e.byKind[k] ?? 0) > 0)
+                .map(([k, label]): [string, ReactNode] => [label, e.byKind[k]]),
+              ...(e.created === 0 ? ([['Raised this month', 'None']] as [string, ReactNode][]) : []),
+              ['Median time to resolve', e.resolved > 0 ? formatDuration(e.medianResolutionMinutes) : 'None resolved yet'],
+              ['Oldest open', openEsc > 0 ? formatDuration(e.oldestOpenMinutes) : 'Nothing open'],
+              ['Times the AI quoted a price', e.policyBreaches === 0 ? 'None' : <span className="text-crit">{e.policyBreaches}</span>],
+            ]}
+          />
+        </Collapsible>
+
+        <Collapsible title="Consultations">
+          <Rows
+            rows={[
+              ['Booked', c.scheduled],
+              ['Held', c.completed],
+              ['No-shows', c.noShow],
+              ['Coming up in the next 7 days', c.upcoming7d],
+              ['Waiting to be marked held', c.awaitingOutcome],
+              ['Good-fit leads that booked', orDash(c.bookingRate, (n) => pct(n))],
+            ]}
+          />
+        </Collapsible>
+
+        <Collapsible title="From enquiry to project">
+          {v.total === 0 ? <p className="text-sm text-mute">No enquiries this month.</p> : <Funnel steps={funnel} />}
+          {v.total > 0 && funnel[funnel.length - 1].n === 0 && <p className="mt-4 text-sm text-mute">No won projects logged yet.</p>}
+        </Collapsible>
+
+        <Collapsible title="How often the AI is overruled">
+          <div className="grid gap-6 sm:grid-cols-2">
+            <div>
+              <div className="label">Good-fit calls later marked bad</div>
+              <div className="num mt-1 text-3xl leading-none">{orDash(q.fpRate, (n) => pct(n))}</div>
+              <p className="mt-2 text-sm text-mute">
+                {q.counts.qualified > 0
+                  ? `${q.falsePositives} of ${q.counts.qualified} good-fit leads turned out not to be. The cost is a little designer time.`
+                  : 'Nothing has been marked a good fit yet.'}
               </p>
-            </Panel>
-
-            <Panel title="Model confidence">
-              {q.avgConfidence === null ? (
-                <p className="text-sm text-mute">No confidence scores recorded yet.</p>
-              ) : (
-                <>
-                  <div className="num text-4xl leading-none">{pct(q.avgConfidence)}</div>
-                  <div className="mt-3"><ConfidenceMeter value={q.avgConfidence} threshold={GUARDRAILS.confidenceMin} label={false} /></div>
-                  <p className="mt-2 text-xs text-mute">
-                    Average composite confidence against the {pct(GUARDRAILS.confidenceMin)} gate. Below the gate, a person checks the transcript before anything goes to a designer.
-                  </p>
-                </>
-              )}
-              <p className="mt-3 border-t border-line pt-3 text-xs text-mute">
-                Gate trips this month: <span className="mono text-bone">{q.gateTrips}</span>
+            </div>
+            <div>
+              <div className="label">Declined leads later rescued</div>
+              <div className="num mt-1 text-3xl leading-none">{orDash(q.fnRate, (n) => pct(n))}</div>
+              <p className="mt-2 text-sm text-mute">
+                {q.fnAudited > 0
+                  ? `${q.falseNegatives} of ${q.fnAudited} double-checked declines were good leads${
+                      q.estMissedGoodLeads !== null ? `. We estimate about ${q.estMissedGoodLeads} good ${q.estMissedGoodLeads === 1 ? 'lead' : 'leads'} were missed in total.` : '.'
+                    }`
+                  : 'No declined leads have been double-checked yet.'}
               </p>
-            </Panel>
+            </div>
           </div>
-
-          <StatGrid>
-            <Stat label="Gray-area queue" value={q.awaitingReview} tone={q.awaitingReview > 0 ? 'warn' : 'ok'} sub="Waiting for a person to decide" />
-            <Stat label="Gray-area rescued" value={q.grayRescued} sub={`${q.grayDeclined} declined after review`} />
-            <Stat label="Audits pending" value={q.auditsOpen} tone={q.auditsOpen > 0 ? 'warn' : 'neutral'} sub="Sampled declines not yet checked" />
-            <Stat label="AI confirmed" value={q.confirmed} sub="Reviewed and the AI was right" />
-          </StatGrid>
-        </div>
-      </section>
-
-      {/* ---------------------------------------------------------------- 04 handoff */}
-      <section>
-        <SectionHead index="04" title="Designer handoff" note="A handoff succeeds when the designer accepts the brief without having to go back to the client for missing basics." />
-        {h.sent === 0 ? (
-          <Empty>
-            No briefs have been sent to designers yet this month.
-            {h.pendingRelease > 0 && <> {plural(h.pendingRelease, 'qualified lead')} {h.pendingRelease === 1 ? 'is' : 'are'} ready to release.</>}
-          </Empty>
-        ) : (
-          <StatGrid>
-            <Stat label="Handoff success" value={share(h.successRate)} tone={h.successRate !== null && h.successRate >= 0.8 ? 'ok' : 'warn'} sub={`Accepted without a re-ask, of ${h.sent} sent`} />
-            <Stat label="Re-ask rate" value={share(h.reaskRate)} tone={h.reaskRate !== null && h.reaskRate > 0.2 ? 'warn' : 'neutral'} sub={`${plural(h.reasked, 'brief')} sent back for missing basics`} />
-            <Stat label="Median time to accept" value={formatDuration(h.medianAcceptMinutes)} sub={`${h.accepted} accepted · ${h.declined} declined`} />
-            <Stat label="Pending release" value={h.pendingRelease} tone={h.pendingRelease > 0 ? 'warn' : 'neutral'} sub="Qualified, brief not yet sent" />
-          </StatGrid>
-        )}
-      </section>
-
-      {/* ---------------------------------------------------------------- 05 escalations */}
-      <section>
-        <SectionHead
-          index="05"
-          title="Escalations"
-          note="Counts only. Open and acknowledged escalations are studio-wide; the by-kind split covers this month's enquiries."
-          right={role === 'designer' ? <Link href={href(ctx.sp, { view: 'escalations', enquiry: null })} className="btn-ghost">Work the queue</Link> : undefined}
-        />
-        <div className="grid gap-3 lg:grid-cols-3">
-          <div className="lg:col-span-3">
-            <StatGrid>
-              <Stat label="Open" value={e.open} tone={e.open > 0 ? 'crit' : 'ok'} />
-              <Stat label="Acknowledged" value={e.acknowledged} tone={e.acknowledged > 0 ? 'warn' : 'neutral'} />
-              <Stat label="Resolved" value={e.resolved} tone="ok" sub="This month" />
-              <Stat label="Open over 24 h" value={e.openOver24h} tone={e.openOver24h > 0 ? 'crit' : 'ok'} sub={`Oldest open: ${formatDuration(e.oldestOpenMinutes)}`} />
-            </StatGrid>
-          </div>
-          <Panel title="By kind (this month)">
-            <DistributionList
-              items={Object.entries(KIND_LABEL).map(([k, label]) => ({ label, n: e.byKind[k] ?? 0, tone: 'accent' as Tone }))}
-              empty="No escalations raised this month."
-            />
-          </Panel>
-          <Panel title="Open by owner">
-            <DistributionList
-              items={Object.entries(OWNER_LABEL).map(([k, label]) => ({ label, n: e.openByOwner[k] ?? 0, tone: 'warn' as Tone }))}
-              empty="Nothing open. Every escalation has been resolved."
-            />
-          </Panel>
-          <Panel title="Resolution & policy">
-            <dl className="space-y-3 text-sm">
-              <Row k="Median resolution" v={e.resolved > 0 ? formatDuration(e.medianResolutionMinutes) : 'None resolved yet'} />
-              <Row k="90th percentile" v={e.resolved > 0 ? formatDuration(e.p90ResolutionMinutes) : '—'} />
-              <Row k="Price-policy breaches" v={<span className={e.policyBreaches > 0 ? 'text-crit' : 'text-ok'}>{e.policyBreaches}{e.policyBreaches === 0 ? ' · none' : ' · agent quoted a price'}</span>} />
-            </dl>
-          </Panel>
-        </div>
-      </section>
-
-      {/* ---------------------------------------------------------------- 06 consultations */}
-      <section>
-        <SectionHead index="06" title="Consultations" note="Booked consultations by status this month; upcoming and awaiting-outcome cover all months." />
-        <StatGrid className="grid-cols-2 md:grid-cols-4 lg:grid-cols-7">
-          <Stat label="Booked" value={c.scheduled} sub="Still scheduled" />
-          <Stat label="Held" value={c.completed} tone={c.completed > 0 ? 'ok' : 'neutral'} />
-          <Stat label="No-show" value={c.noShow} tone={c.noShow > 0 ? 'warn' : 'neutral'} />
-          <Stat label="Cancelled" value={c.cancelled} />
-          <Stat label="Next 7 days" value={c.upcoming7d} sub="Upcoming" />
-          <Stat label="Awaiting outcome" value={c.awaitingOutcome} tone={c.awaitingOutcome > 0 ? 'warn' : 'neutral'} sub="Past, not marked held" />
-          <Stat label="Booking rate" value={share(c.bookingRate)} sub="Of qualified leads" />
-        </StatGrid>
-      </section>
-
-      {/* ---------------------------------------------------------------- 07 funnel */}
-      <section>
-        <SectionHead index="07" title="Funnel" note="From first enquiry to a signed project. Each step shows what share of the step above made it through." />
-        {v.total === 0 ? <Empty>No enquiries this month.</Empty> : <Funnel steps={funnel} />}
-        {v.total > 0 && funnel[funnel.length - 1].n === 0 && <p className="mt-2 text-xs text-mute">No won projects logged yet.</p>}
-      </section>
+          <p className="mt-5 text-sm">
+            Missing a good lead is the costlier mistake: it is revenue we never see, while a wrong good-fit call only costs a designer a few minutes.
+          </p>
+        </Collapsible>
+      </div>
     </div>
   );
 }
 
 // ---- small local pieces ---------------------------------------------------------------------------
 
-function Row({ k, v }: { k: string; v: ReactNode }) {
+/** Plain label / value rows, three to six per section. */
+function Rows({ rows }: { rows: [string, ReactNode][] }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-line pb-2 last:border-b-0 last:pb-0">
-      <dt className="text-mute">{k}</dt>
-      <dd className="mono text-bone">{v}</dd>
-    </div>
-  );
-}
-
-function MedianCell({ name, minutes, missing = 'No data' }: { name: string; minutes: number | null; missing?: string }) {
-  return (
-    <div>
-      <dt className="label">{name}</dt>
-      <dd className="num mt-1 text-xl leading-none">{minutes === null ? <span className="text-sm font-normal text-mute">{missing}</span> : formatDuration(minutes)}</dd>
-    </div>
-  );
-}
-
-/** Ingestion endpoints for WhatsApp / web form are scaffolded; "receiving" is derived from this month's volume. */
-function ChannelNote({ name, endpoint, n }: { name: string; endpoint: string; n: number }) {
-  return (
-    <div className="flex items-start justify-between gap-3 text-xs">
-      <div className="text-mute">
-        <span className="text-bone">{name}</span> endpoint scaffolded (<span className="font-mono">{endpoint}</span>).
-      </div>
-      <Badge tone={n > 0 ? 'ok' : 'neutral'}>{n > 0 ? `${n} received` : 'Awaiting provider'}</Badge>
-    </div>
+    <dl className="divide-y divide-line text-sm">
+      {rows.map(([k, val]) => (
+        <div key={k} className="flex items-baseline justify-between gap-4 py-2.5 first:pt-0 last:pb-0">
+          <dt className="text-mute">{k}</dt>
+          <dd className="text-right tabular-nums">{val}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

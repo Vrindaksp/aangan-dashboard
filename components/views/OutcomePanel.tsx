@@ -1,31 +1,69 @@
-// Outcome and response: record the first response, mark won / lost.
+// Follow up tab: the first reply, and the outcome (won / lost).
 
 import { markRespondedAction, setOutcomeAction } from '@/app/actions';
-import { Badge, Panel, ReturnTo } from '@/components/ui';
+import { Badge, Collapsible, Panel, ReturnTo } from '@/components/ui';
 import { formatDateTime, formatDuration, formatLakhCr } from '@/lib/format';
-import { Field, type InspectorData } from './inspector-kit';
+import { Field, More, type InspectorData } from './inspector-kit';
+
+/** One compact card: has the client had a first reply? */
+export function RepliedCard({ d }: { d: InspectorData }) {
+  const { ctx, e } = d;
+  const answered = e.first_response_at ? (new Date(e.first_response_at).getTime() - new Date(e.received_at).getTime()) / 60_000 : null;
+  return (
+    <Panel title="First reply" right={e.first_response_at ? <Badge tone="ok">Replied</Badge> : <Badge tone="warn">Not recorded</Badge>}>
+      {e.first_response_at ? (
+        <p className="text-[15px]">
+          Replied {formatDateTime(e.first_response_at)}
+          {answered !== null && <span className="text-mute"> · {formatDuration(Math.max(0, answered))} after the enquiry arrived</span>}
+        </p>
+      ) : (
+        <>
+          <p className="mb-3 text-sm text-mute">
+            {e.channel === 'web_form' ? 'Replies to web-form enquiries were never logged. ' : ''}
+            If you have been in touch another way, record it here. A real email sent from this page records it automatically.
+          </p>
+          <form action={markRespondedAction} className="flex flex-wrap items-center gap-3">
+            <input type="hidden" name="enquiry_id" value={e.id} />
+            <ReturnTo value={ctx.returnTo} />
+            <button type="submit" className="btn-solid">Mark as replied</button>
+          </form>
+          <More title="It was at a different time">
+            <form action={markRespondedAction} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <input type="hidden" name="enquiry_id" value={e.id} />
+              <ReturnTo value={ctx.returnTo} />
+              <Field label="Replied at (IST)" htmlFor="resp-at" className="sm:w-64">
+                <input id="resp-at" type="datetime-local" name="at" className="field" />
+              </Field>
+              <button type="submit" className="btn">Record this time</button>
+            </form>
+          </More>
+        </>
+      )}
+    </Panel>
+  );
+}
 
 export function OutcomePanel({ d }: { d: InspectorData }) {
   const { ctx, e } = d;
   const closed = e.status === 'won' || e.status === 'lost';
-  const answered = e.first_response_at ? (new Date(e.first_response_at).getTime() - new Date(e.received_at).getTime()) / 60_000 : null;
+  const handedOff = e.handoff_status !== 'not_sent';
 
-  const outcomeForms = (
+  const forms = (
     <div className="grid gap-4 sm:grid-cols-2">
-      <form action={setOutcomeAction} className="space-y-2 border border-line p-3">
+      <form action={setOutcomeAction} className="space-y-3 rounded-xl bg-subtle p-4">
         <input type="hidden" name="enquiry_id" value={e.id} />
         <input type="hidden" name="outcome" value="won" />
         <ReturnTo value={ctx.returnTo} />
-        <Field label="Signed project value (₹ lakh)" htmlFor="won-val" hint="Signed project value in ₹ lakh. Example: 18.5 means ₹18.5 L.">
-          <input id="won-val" name="value_lakh" type="number" min="0.1" step="0.1" required inputMode="decimal" placeholder="e.g. 18.5" className="field" />
+        <Field label="Project value (₹ lakh)" htmlFor="won-val" hint="For example 18.5 means ₹18.5 lakh.">
+          <input id="won-val" name="value_lakh" type="number" min="0.1" step="0.1" required inputMode="decimal" placeholder="18.5" className="field" />
         </Field>
         <button type="submit" className="btn-solid">Mark won</button>
       </form>
-      <form action={setOutcomeAction} className="space-y-2 border border-line p-3">
+      <form action={setOutcomeAction} className="space-y-3 rounded-xl bg-subtle p-4">
         <input type="hidden" name="enquiry_id" value={e.id} />
         <input type="hidden" name="outcome" value="lost" />
         <ReturnTo value={ctx.returnTo} />
-        <Field label="Why was it lost?" htmlFor="lost-reason" hint="e.g. chose another studio, budget, timeline, went silent">
+        <Field label="Why was it lost?" htmlFor="lost-reason" hint="For example chose another studio, budget, or went quiet.">
           <input id="lost-reason" name="reason" maxLength={300} className="field" />
         </Field>
         <button type="submit" className="btn-danger">Mark lost</button>
@@ -33,46 +71,24 @@ export function OutcomePanel({ d }: { d: InspectorData }) {
     </div>
   );
 
-  return (
-    <Panel title="Outcome and response" right={closed ? <Badge tone={e.status === 'won' ? 'ok' : 'crit'}>{e.status === 'won' ? 'Won' : 'Lost'}</Badge> : undefined}>
-      <div className="mb-4">
-        <div className="label mb-1">First response</div>
-        {e.first_response_at ? (
-          <p className="text-sm text-bone">
-            Recorded <span className="mono">{formatDateTime(e.first_response_at)}</span>
-            {answered !== null && <span className="text-mute"> · {formatDuration(answered)} after the enquiry arrived</span>}
-          </p>
-        ) : (
-          <form action={markRespondedAction} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <input type="hidden" name="enquiry_id" value={e.id} />
-            <ReturnTo value={ctx.returnTo} />
-            <Field label="Responded at (IST, blank = now)" htmlFor="resp-at" className="sm:w-64">
-              <input id="resp-at" type="datetime-local" name="at" className="field" />
-            </Field>
-            <button type="submit" className="btn-solid">Record first response</button>
-          </form>
-        )}
-        {!e.first_response_at && <p className="mt-1 text-xs text-mute">Use this when you reached the client by a channel the dashboard cannot see. A real client email send records it automatically.</p>}
-      </div>
+  if (closed) {
+    return (
+      <Panel title="Outcome" right={<Badge tone={e.status === 'won' ? 'ok' : 'crit'}>{e.status === 'won' ? 'Won' : 'Lost'}</Badge>}>
+        <p className="text-[15px]">
+          {e.status === 'won'
+            ? <>Won, with a project value of <strong>{formatLakhCr(e.final_value_inr)}</strong>.</>
+            : <>Lost{e.closed_reason ? `: ${e.closed_reason}` : ' (no reason recorded)'}.</>}
+        </p>
+        <More title="Change the outcome">{forms}</More>
+      </Panel>
+    );
+  }
 
-      <div className="border-t border-line pt-3">
-        <div className="label mb-2">Outcome</div>
-        {closed ? (
-          <>
-            <p className="text-sm text-bone">
-              {e.status === 'won'
-                ? <>Won, signed value <span className="mono font-bold">{formatLakhCr(e.final_value_inr)}</span>.</>
-                : <>Lost{e.closed_reason ? `: ${e.closed_reason}` : ' (no reason recorded)'}.</>}
-            </p>
-            <details className="mt-2">
-              <summary className="label hover:text-bone">Change the outcome</summary>
-              <div className="mt-2">{outcomeForms}</div>
-            </details>
-          </>
-        ) : (
-          outcomeForms
-        )}
-      </div>
-    </Panel>
+  // Only once the brief has gone to a designer is an outcome something you would record every day.
+  if (handedOff) return <Panel title="Outcome">{forms}</Panel>;
+  return (
+    <Collapsible title="Outcome" hint="won or lost, when it is decided">
+      {forms}
+    </Collapsible>
   );
 }

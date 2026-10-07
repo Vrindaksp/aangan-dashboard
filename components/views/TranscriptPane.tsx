@@ -1,9 +1,13 @@
-// Transcript inspector: raw vs processed text side by side, speaker labels, uncertainty markers, AI cost, extracted entities.
+// Conversation tab: the transcript typeset like a chat, how sure the AI is, and the technical extraction details.
+// (Details tab reuses ConfidenceDetails.)
 
-import { Badge, Empty, Panel } from '@/components/ui';
+import Link from 'next/link';
+import { Badge, Bar, Collapsible, ConfidenceMeter, Empty, Panel } from '@/components/ui';
+import { GUARDRAILS } from '@/lib/config';
 import { pct, titleCase } from '@/lib/format';
 import { findAgentPriceDisclosures } from '@/lib/pricing';
-import { KV, type InspectorData } from './inspector-kit';
+import { href } from '@/lib/url';
+import { KV, Notice, type InspectorData } from './inspector-kit';
 
 // "Front Desk: …", "Caller: …", "4 Sept, 11:47am — Front Desk: …", form rows like "How did you find us: …".
 const LINE = /^((?:\d{1,2}\s+\w+,?\s+[\d:]+\s*[apAP][mM]\s*[—-]\s*)?)([A-Z][^:\n—]{0,31}):\s?(.*)$/;
@@ -25,7 +29,7 @@ function Marked({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         i % 2 === 1 ? (
-          <mark key={i} className="border-b border-warn bg-warn/20 px-0.5 font-mono text-warn" title="Low-confidence span">{p}</mark>
+          <mark key={i} className="rounded bg-warn-soft px-1 font-medium text-warn" title="The AI could not make this out">{p}</mark>
         ) : (
           <span key={i}>{p}</span>
         ),
@@ -34,33 +38,28 @@ function Marked({ text }: { text: string }) {
   );
 }
 
-function Pane({ title, sub, text, offenders }: { title: string; sub: string; text: string; offenders: Set<string> }) {
+function Typeset({ text, offenders, label }: { text: string; offenders: Set<string>; label: string }) {
   const lines = text.split(/\r?\n/);
-  const markers = (text.match(MARKER) ?? []).length;
   return (
-    <div className="min-w-0">
-      <div className="mb-1 flex items-baseline justify-between gap-2">
-        <h4 className="label text-bone">{title}</h4>
-        <span className="mono text-[11px] text-mute">{sub}{markers ? ` · ${markers} uncertain` : ''}</span>
-      </div>
-      <div className="scroll-thin max-h-[420px] overflow-y-auto border border-line bg-ink p-3 text-sm leading-relaxed" tabIndex={0} role="region" aria-label={`${title} transcript`}>
-        {lines.map((raw, i) => {
-          if (!raw.trim()) return <div key={i} className="h-2" />;
-          const p = parseLine(raw);
-          const quoted = p.studio && offenders.has(raw.trim().slice(0, 240));
-          return (
-            <div
-              key={i}
-              className={`mb-1 border-l-2 pl-2 ${quoted ? 'border-crit bg-crit/10' : p.studio ? 'border-accent/70' : p.label ? 'border-info/50' : 'border-transparent'}`}
-            >
-              {p.stamp && <span className="mono mr-1.5 text-[11px] text-mute">{p.stamp}</span>}
-              {p.label && <strong className={`mr-1.5 font-mono text-xs uppercase tracking-wide ${p.studio ? 'text-accent' : 'text-info'}`}>{p.label}:</strong>}
-              <span className={p.studio ? 'text-bone' : 'text-bone/90'}><Marked text={p.body} /></span>
-              {quoted && <span className="ml-2 inline-block align-middle"><Badge tone="crit">Quoted a price</Badge></span>}
-            </div>
-          );
-        })}
-      </div>
+    <div className="scroll-thin max-h-[520px] space-y-2 overflow-y-auto pr-1" tabIndex={0} role="region" aria-label={label}>
+      {lines.map((raw, i) => {
+        if (!raw.trim()) return null;
+        const p = parseLine(raw);
+        const quoted = p.studio && offenders.has(raw.trim().slice(0, 240));
+        const tone = quoted ? 'bg-crit-soft' : p.studio ? 'bg-subtle' : p.label ? 'bg-info-soft/60' : '';
+        return (
+          <div key={i} className={`rounded-xl px-3.5 py-2.5 text-[15px] leading-relaxed ${tone}`}>
+            {p.label && (
+              <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2">
+                <strong className={`text-[13px] font-semibold ${p.studio ? 'text-accent' : 'text-info'}`}>{p.label}</strong>
+                {p.stamp && <span className="text-[13px] text-mute">{p.stamp}</span>}
+              </div>
+            )}
+            <div><Marked text={p.body} /></div>
+            {quoted && <div className="mt-1"><Badge tone="crit">Quoted a price</Badge></div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -74,81 +73,122 @@ function scalar(v: unknown): string {
 
 const SKIP_ENTITY_KEYS = new Set(['field_confidence', 'criteria', 'criteria_notes']);
 
-export function TranscriptPanel({ d }: { d: InspectorData }) {
-  const { e, tr, escs } = d;
+function fieldConfidence(d: InspectorData): Record<string, number> {
+  const { tr } = d;
+  return tr?.field_confidence && Object.keys(tr.field_confidence).length ? tr.field_confidence : tr?.extraction?.field_confidence ?? {};
+}
+
+/** The plain-language "how sure the AI is" line. */
+function HowSure({ d }: { d: InspectorData }) {
+  const { e, tr } = d;
+  const thr = GUARDRAILS.confidenceMin;
+  const v = e.composite_confidence;
+  const flags = [...new Set([...(tr?.ambiguity_flags ?? []), ...(tr?.extraction?.ambiguity_flags ?? [])])];
+  return (
+    <Panel title="How sure the AI is">
+      {v === null ? (
+        <p className="text-sm text-mute">Nothing was scored, because there was no conversation to read.</p>
+      ) : (
+        <div className="space-y-2">
+          <ConfidenceMeter value={v} threshold={thr} />
+          <p className="text-[15px]">
+            {v >= thr
+              ? `The AI is fairly sure it understood this conversation (${pct(v)}), so it can go straight to a designer.`
+              : `The AI is not fully sure it understood this conversation (${pct(v)}), so a person should check it first.`}
+          </p>
+        </div>
+      )}
+      {flags.length > 0 && (
+        <div className="mt-4">
+          <div className="label mb-1.5">Things that were unclear</div>
+          <div className="flex flex-wrap gap-1.5">
+            {flags.map((f) => <Badge key={f} tone="warn">{f}</Badge>)}
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+export function ConversationTab({ d }: { d: InspectorData }) {
+  const { ctx, e, tr, escs } = d;
   const hasText = Boolean(tr && tr.raw_text.trim());
 
   if (!tr || !hasText) {
     const missed = e.call_outcome === 'missed' || e.call_outcome === 'dropped';
     return (
-      <Panel title="Transcript inspector">
+      <div className="space-y-6">
         <Empty>
-          <strong className="text-bone">No conversation.</strong>{' '}
+          <strong className="text-text">No conversation to show.</strong>{' '}
           {missed
-            ? `This was a ${e.call_outcome} call, so there is no audio, no transcript and nothing for the AI to extract. Call the number back and record the first response.`
-            : 'No transcript is stored for this enquiry, so there is no raw or processed text to compare.'}
+            ? `This was a ${e.call_outcome} call, so there is no recording or transcript. Call them back, then mark the enquiry as replied.`
+            : 'No transcript was saved for this enquiry.'}
         </Empty>
-      </Panel>
+        <HowSure d={d} />
+      </div>
     );
   }
 
   const breach = escs.some((x) => x.trigger === 'agent_policy_breach');
   const offenders = new Set(breach ? [...findAgentPriceDisclosures(tr.raw_text), ...findAgentPriceDisclosures(tr.processed_text ?? '')] : []);
   const hasProcessed = Boolean(tr.processed_text && tr.processed_text.trim());
+  const clean = hasProcessed && ctx.sp.tx === 'clean';
   const dur = tr.duration_seconds ?? e.call_duration_seconds;
   const entities = tr.extraction ? Object.entries(tr.extraction).filter(([k]) => !SKIP_ENTITY_KEYS.has(k)) : [];
-  const conf = tr.field_confidence && Object.keys(tr.field_confidence).length ? tr.field_confidence : tr.extraction?.field_confidence ?? {};
+  const conf = fieldConfidence(d);
+  const thr = GUARDRAILS.confidenceMin;
+  const source = tr.source === 'audio' ? 'Phone call' : tr.source === 'form' ? 'Web form' : 'Chat';
 
   return (
-    <Panel
-      title="Transcript inspector"
-      right={<Badge tone="neutral">{tr.source === 'audio' ? 'Audio transcription' : tr.source === 'form' ? 'Web form text' : 'Chat text'}</Badge>}
-    >
+    <div className="space-y-6">
       {breach && (
-        <div className="mb-3 border border-crit/60 bg-crit/10 px-3 py-2 text-sm">
-          <span className="label mr-2 text-crit">Policy breach</span>
-          <span className="text-bone">
-            The studio side may have quoted a price. {offenders.size > 0
-              ? `${offenders.size} line${offenders.size === 1 ? ' is' : 's are'} highlighted below.`
-              : 'No single line matched the price pattern; read the studio lines below.'}
-          </span>
-        </div>
+        <Notice tone="crit">
+          <strong>Heads up:</strong> the studio side may have quoted a price.{' '}
+          {offenders.size > 0 ? `${offenders.size === 1 ? 'The line is' : 'The lines are'} marked below.` : 'No single line matched, so read the studio lines.'}
+        </Notice>
       )}
 
-      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-mute">
-        <span><span className="label mr-1">Studio</span><span className="mono text-accent">Front Desk:</span></span>
-        <span><span className="label mr-1">Prospect</span><span className="mono text-info">Caller:</span></span>
-        <span><mark className="border-b border-warn bg-warn/20 px-0.5 font-mono text-warn">[inaudible]</mark> low-confidence span</span>
-      </div>
+      <Panel
+        title={clean ? 'Conversation (cleaned up)' : 'Conversation'}
+        right={
+          <div className="flex items-center gap-3">
+            <Badge>{source}</Badge>
+            {hasProcessed && (
+              <Link href={href(ctx.sp, { tx: clean ? null : 'clean' })} className="text-sm font-medium text-accent hover:underline">
+                {clean ? 'Show the original' : 'Show the cleaned-up version'}
+              </Link>
+            )}
+          </div>
+        }
+      >
+        <Typeset
+          text={clean ? (tr.processed_text as string) : tr.raw_text}
+          offenders={offenders}
+          label={clean ? 'Cleaned-up conversation' : 'Conversation'}
+        />
+      </Panel>
 
-      <div className={`grid gap-4 ${hasProcessed ? 'xl:grid-cols-2' : ''}`}>
-        <Pane title="Raw (verbatim)" sub={`${tr.raw_text.length.toLocaleString('en-IN')} chars`} text={tr.raw_text} offenders={offenders} />
-        {hasProcessed && <Pane title="Processed (cleaned)" sub="normalised for extraction" text={tr.processed_text as string} offenders={offenders} />}
-      </div>
-      {!hasProcessed && <p className="mt-2 text-xs text-mute">No separate processed version: the source text was already clean, so extraction ran on the raw text.</p>}
+      <HowSure d={d} />
 
-      <dl className="mt-4 grid gap-x-8 sm:grid-cols-2 lg:grid-cols-3">
-        <KV k="Language">{tr.language ?? '—'}</KV>
-        <KV k="Duration">{dur ? `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')} min` : '—'}</KV>
-        <KV k="Model">{tr.model ?? '—'}</KV>
-        <KV k="Tokens in / out">{tr.input_tokens !== null || tr.output_tokens !== null ? `${tr.input_tokens ?? 0} / ${tr.output_tokens ?? 0}` : '—'}</KV>
-        <KV k="AI cost">{`₹${tr.ai_cost_inr.toFixed(2)}`}</KV>
-        <KV k="Stored">{tr.audio_url ? 'audio on file' : 'text only'}</KV>
-      </dl>
-
-      {entities.length > 0 && (
-        <details className="mt-4 border border-line">
-          <summary className="label flex items-center justify-between px-3 py-2 hover:bg-raised hover:text-bone">
-            <span>Extracted entities ({entities.length})</span>
-            <span className="text-dim">expand</span>
-          </summary>
+      <Collapsible title="Extracted data and confidence" hint={entities.length > 0 ? `${entities.length} fields` : undefined}>
+        <dl className="mb-4 grid gap-x-8 sm:grid-cols-2">
+          <KV k="Language">{tr.language ?? '—'}</KV>
+          <KV k="Length">{dur ? `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')} min` : '—'}</KV>
+          <KV k="Model">{tr.model ?? '—'}</KV>
+          <KV k="Tokens in / out">{tr.input_tokens !== null || tr.output_tokens !== null ? `${tr.input_tokens ?? 0} / ${tr.output_tokens ?? 0}` : '—'}</KV>
+          <KV k="AI cost">{`₹${tr.ai_cost_inr.toFixed(2)}`}</KV>
+          <KV k="Recording">{tr.audio_url ? 'Audio on file' : 'Text only'}</KV>
+        </dl>
+        {entities.length === 0 ? (
+          <p className="text-sm text-mute">Nothing was extracted from this conversation.</p>
+        ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[420px] border-collapse">
               <thead>
                 <tr>
                   <th scope="col" className="th">Field</th>
-                  <th scope="col" className="th">Extracted value</th>
-                  <th scope="col" className="th text-right">Confidence</th>
+                  <th scope="col" className="th">What the AI found</th>
+                  <th scope="col" className="th text-right">How sure</th>
                 </tr>
               </thead>
               <tbody>
@@ -156,17 +196,67 @@ export function TranscriptPanel({ d }: { d: InspectorData }) {
                   const c = conf[k];
                   return (
                     <tr key={k}>
-                      <th scope="row" className="td whitespace-nowrap text-left font-mono text-xs font-normal text-mute">{titleCase(k)}</th>
-                      <td className="td break-words text-bone">{scalar(v)}</td>
-                      <td className={`td mono text-right text-xs ${c === undefined ? 'text-dim' : c < 0.85 ? 'text-crit' : 'text-ok'}`}>{c === undefined ? '—' : pct(c)}</td>
+                      <th scope="row" className="td whitespace-nowrap text-left font-normal text-mute">{titleCase(k)}</th>
+                      <td className="td break-words">{scalar(v)}</td>
+                      <td className={`td text-right tabular-nums ${c === undefined ? 'text-faint' : c < thr ? 'font-medium text-crit' : 'text-ok'}`}>{c === undefined ? '—' : pct(c)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-        </details>
+        )}
+      </Collapsible>
+    </div>
+  );
+}
+
+/** Gate explanation + per-field confidence bars (used in the Details tab). */
+export function ConfidenceDetails({ d }: { d: InspectorData }) {
+  const { e, tr, escs } = d;
+  const thr = GUARDRAILS.confidenceMin;
+  const fields = Object.entries(fieldConfidence(d)).sort((a, b) => a[1] - b[1]);
+  const trEsc = escs.filter((x) => x.kind === 'transcription');
+  const held = (e.composite_confidence !== null && e.composite_confidence < thr) || trEsc.length > 0;
+  const noData = e.composite_confidence === null && e.transcription_confidence === null;
+  const inaudible = tr?.extraction?.inaudible_count ?? null;
+
+  return (
+    <Collapsible title="How sure the AI is, field by field" hint={noData ? 'no scores' : held ? 'held for a check' : 'passed'}>
+      {noData ? (
+        <p className="text-sm text-mute">Nothing was scored, because nothing was transcribed (for example a missed call).</p>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <div className="label mb-1">Overall</div>
+              <ConfidenceMeter value={e.composite_confidence} threshold={thr} />
+              <p className="mt-1 text-[13px] text-mute">Blends how well the speech was heard with how clearly the scope and place came through.</p>
+            </div>
+            <div>
+              <div className="label mb-1">Speech heard correctly</div>
+              <ConfidenceMeter value={e.transcription_confidence ?? tr?.transcription_confidence ?? null} threshold={thr} />
+              <p className="mt-1 text-[13px] text-mute">
+                {inaudible !== null ? `${inaudible} spot${inaudible === 1 ? '' : 's'} could not be made out.` : 'No extraction was stored.'}
+              </p>
+            </div>
+          </div>
+          <p className="text-sm text-mute">
+            Anything below {pct(thr)} is held for a person instead of going to a designer. {held ? 'This one is being held.' : 'This one cleared it.'}
+          </p>
+          {fields.length > 0 && (
+            <ul className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
+              {fields.map(([k, v]) => (
+                <li key={k} className="grid grid-cols-[8rem_1fr_3rem] items-center gap-2">
+                  <span className="truncate text-sm text-mute" title={k}>{titleCase(k)}</span>
+                  <Bar value={v} max={1} tone={v >= thr ? 'ok' : 'crit'} label={`${titleCase(k)} ${pct(v)}`} />
+                  <span className={`text-right text-[13px] tabular-nums ${v >= thr ? 'text-ok' : 'text-crit'}`}>{pct(v)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
-    </Panel>
+    </Collapsible>
   );
 }

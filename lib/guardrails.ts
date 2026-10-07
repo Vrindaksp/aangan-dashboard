@@ -382,7 +382,7 @@ export function triage(x: Extraction, ctx: TriageContext): TriageResult {
     reasons.push(`Unclear on: ${blockingUnclear.map((k) => k.replace('_', ' ')).join(', ')} — ask one direct question before forwarding.`);
     escalations.push({
       kind: 'lead_qualification', trigger: 'needs_clarification', severity: 'low', assignedTo: 'front_desk',
-      reason: `Rubric criterion unclear (${blockingUnclear.map((k) => k.replace('_', ' ')).join(', ')}). Gray-area lead — not declined, not forwarded.`,
+      reason: `Not enough information yet about: ${blockingUnclear.map((k) => k.replace('_', ' ')).join(', ')}. Ask the client, then decide — it has not been declined or forwarded.`,
       detail: { unclear: blockingUnclear }, suggestedQuestion, blocksHandoff: true,
     });
   } else {
